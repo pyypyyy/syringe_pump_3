@@ -14,6 +14,7 @@ class StepperDriver:
         self.step_position = 0
         self.step_position_valid = True
         self._gpio = None
+        self.stop_requested = False
         if self.mode == 'raspberry_pi':
             self._init_gpio()
 
@@ -41,9 +42,10 @@ class StepperDriver:
             self._gpio.output(self.enable_pin, 1 if self.enable_active_low else 0)
 
     def stop(self):
-        pass
+        self.stop_requested = True
 
     def move_steps(self, steps, direction_toward_empty, step_delay_s=0.001):
+        self.stop_requested = False
         steps = int(abs(steps))
         if steps == 0:
             return
@@ -55,10 +57,19 @@ class StepperDriver:
         if self._gpio:
             self._gpio.output(self.dir_pin, dir_level)
             for _ in range(steps):
+                if self.stop_requested:
+                    break
                 self._gpio.output(self.step_pin, 1)
                 time.sleep(step_delay_s / 2)
                 self._gpio.output(self.step_pin, 0)
                 time.sleep(step_delay_s / 2)
         else:
-            time.sleep(min(0.25, steps * step_delay_s))
+            slept = 0.0
+            total_sleep = min(0.25, steps * step_delay_s)
+            while slept < total_sleep:
+                if self.stop_requested:
+                    break
+                d = min(0.005, total_sleep - slept)
+                time.sleep(d)
+                slept += d
         self.step_position += steps if direction_toward_empty else -steps

@@ -44,3 +44,17 @@ jog:
 safety:
   min_volume_ml: -1.0
   max_volume_ml: 101.0
+flow_calibration:
+  gases: [air, co2]
+  default_gas: air
+  flows_lpm: [0.02, 0.05, 0.10, 0.25, 0.50, 0.75, 1.00]
+  repeats: 3
+  stroke_start_ml: 100.0
+  stroke_end_ml: 0.0
+  analysis_min_ml: 10.0
+  analysis_max_ml: 90.0
+  sample_interval_s: 0.05
+  settle_before_s: 1.0
+  settle_after_s: 0.5
+  fit_method: piecewise_linear
+  save_raw_csv: true

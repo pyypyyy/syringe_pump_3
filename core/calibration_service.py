@@ -5,9 +5,11 @@ from hardware.stepper_driver import StepperDriver
 from motion.jog_controller import JogController
 from motion.softpot_calibrator import SoftpotCalibrator
 from core.calibration_store import FlowCalibrationStore
+from calibration.flow_calibration_runner import FlowCalibrationRunner
 from datetime import datetime, timezone
 import csv
 import io
+import threading
 
 
 class CalibrationService:
@@ -23,6 +25,9 @@ class CalibrationService:
         self.mode = 'idle'
         self.last_event = 'Application started'
         self.events = [self.last_event]
+        self.flow_run_status = {'running': False, 'result': None}
+        self.flow_stop_requested = False
+        self._flow_thread = None
         storage_cfg = config.get('storage', {})
         points_path = storage_cfg.get('flow_points_path', 'data/flow_calibration_points.json')
         self.flow_store = FlowCalibrationStore(points_path)
@@ -48,6 +53,12 @@ class CalibrationService:
         self.events.append(message)
         self.events = self.events[-20:]
 
+    def _set_flow_status(self, **kwargs):
+        self.flow_run_status.update(kwargs)
+
+    def _is_stop_requested(self):
+        return self.flow_stop_requested or self.stepper.stop_requested
+
     def get_status(self):
         softpot_voltage = self.softpot.read_voltage()
         softpot_volume = None
@@ -69,8 +80,46 @@ class CalibrationService:
             'last_event': self.last_event,
             'events': list(reversed(self.events)),
             'flow_calibration_points': list(reversed(self.flow_calibration_points)),
+            **self.flow_run_status,
         }
 
+    def start_flow_calibration(self, payload):
+        if self.position_model is None:
+            return {'ok': False, 'error': 'Softpot must be calibrated before flow calibration.'}
+        if self.flow_run_status.get('running'):
+            return {'ok': False, 'error': 'Flow calibration already running.'}
+        gas = str(payload.get('gas', self.config.get('flow_calibration', {}).get('default_gas', 'air'))).lower()
+        if gas not in ('air', 'co2'):
+            return {'ok': False, 'error': "gas must be 'air' or 'co2'"}
+        fc = self.config.get('flow_calibration', {})
+        flows_lpm = payload.get('flows_lpm', fc.get('flows_lpm', [0.02, 0.05]))
+        repeats = int(payload.get('repeats', fc.get('repeats', 3)))
+        stroke_start_ml = float(payload.get('stroke_start_ml', fc.get('stroke_start_ml', 100.0)))
+        stroke_end_ml = float(payload.get('stroke_end_ml', fc.get('stroke_end_ml', 0.0)))
+        self.flow_stop_requested = False
+
+        runner = FlowCalibrationRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._set_flow_status, self._is_stop_requested)
+
+        def _run():
+            self.mode = 'flow_calibration'
+            result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml)
+            self.mode = 'idle'
+            self.log(f"Flow calibration completed for {gas}: {result['run_id']}")
+
+        self._set_flow_status(running=True, gas=gas, current_trial=None, completed_trials=0, total_trials=len(flows_lpm) * repeats, current_target_flow_lpm=None, latest_softpot_volume_ml=None, latest_flow_voltage_v=None, run_dir=None, result=None)
+        self._flow_thread = threading.Thread(target=_run, daemon=True)
+        self._flow_thread.start()
+        return {'ok': True, 'run_id': 'starting', 'trial_count': len(flows_lpm) * repeats}
+
+    def stop_flow_calibration(self):
+        self.flow_stop_requested = True
+        self.stepper.stop()
+        return {'ok': True}
+
+    def flow_results(self):
+        return {'ok': True, 'result': self.flow_run_status.get('result')}
+
+    # existing methods below
     def add_flow_calibration_point(self, gas, expected_flow_lpm):
         gas_name = str(gas or '').strip().lower()
         if gas_name not in ('air', 'co2'):
@@ -79,88 +128,38 @@ class CalibrationService:
         measured_voltage = self.flow_sensor.read_voltage()
         estimated_flow = self.flow_sensor.estimate_flow_lpm(measured_voltage)
         timestamp = datetime.now(timezone.utc).isoformat()
-        point = {
-            'gas': gas_name,
-            'expected_flow_lpm': expected,
-            'measured_voltage_v': measured_voltage,
-            'estimated_flow_lpm': estimated_flow,
-            'timestamp': timestamp,
-        }
+        point = {'gas': gas_name, 'expected_flow_lpm': expected, 'measured_voltage_v': measured_voltage, 'estimated_flow_lpm': estimated_flow, 'timestamp': timestamp}
         self.flow_calibration_points.append(point)
         self._safe_save_flow_points()
         self.log(f"Flow calibration point captured ({gas_name}, expected {expected:.4f} L/min): {measured_voltage:.4f} V")
         return {'ok': True, 'point': point}
-
     def reset_flow_calibration_points(self):
         self.flow_calibration_points = []
         self._safe_save_flow_points()
         self.log('Flow calibration points reset')
         return {'ok': True}
-
     def flow_calibration_csv(self):
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=[
-            'gas', 'expected_flow_lpm', 'measured_voltage_v', 'estimated_flow_lpm', 'timestamp'
-        ])
-        writer.writeheader()
-        for point in self.flow_calibration_points:
-            writer.writerow(point)
-        return output.getvalue()
-
+        output = io.StringIO(); writer = csv.DictWriter(output, fieldnames=['gas', 'expected_flow_lpm', 'measured_voltage_v', 'estimated_flow_lpm', 'timestamp']); writer.writeheader(); [writer.writerow(p) for p in self.flow_calibration_points]; return output.getvalue()
     def start_softpot_calibration(self):
-        self.mode = 'softpot_calibration'
-        self.softpot_calibrator.reset()
-        self.position_model = None
-        self.log('Softpot calibration started')
-        return {'ok': True, 'current_target_ml': self.softpot_calibrator.current_target}
-
+        self.mode = 'softpot_calibration'; self.softpot_calibrator.reset(); self.position_model = None; self.log('Softpot calibration started'); return {'ok': True, 'current_target_ml': self.softpot_calibrator.current_target}
     def accept_softpot_point(self):
-        result = self.softpot_calibrator.accept_current_point()
-        p = result['point']
-        self.log(f"{p['volume_ml']:.1f} ml point accepted: {p['voltage_v']:.4f} V")
+        result = self.softpot_calibrator.accept_current_point(); p = result['point']; self.log(f"{p['volume_ml']:.1f} ml point accepted: {p['voltage_v']:.4f} V")
         if result.get('complete'):
             valid, message = self.softpot_calibrator.validate()
-            if valid:
-                self.position_model = self.softpot_calibrator.make_position_model()
-                self.log('Softpot calibration completed')
-            else:
-                self.log(f'Softpot calibration validation failed: {message}')
+            if valid: self.position_model = self.softpot_calibrator.make_position_model(); self.log('Softpot calibration completed')
+            else: self.log(f'Softpot calibration validation failed: {message}')
         return result
-
     def save_softpot_calibration(self):
         result = self.softpot_calibrator.save()
-        if result.get('ok'):
-            self.position_model = self.softpot_calibrator.make_position_model()
-            self.log(f"Softpot calibration saved: {result['path']}")
-        else:
-            self.log(f"Softpot calibration save failed: {result.get('error')}")
+        if result.get('ok'): self.position_model = self.softpot_calibrator.make_position_model(); self.log(f"Softpot calibration saved: {result['path']}")
+        else: self.log(f"Softpot calibration save failed: {result.get('error')}")
         return result
-
     def jog(self, direction, amount_type, amount):
-        if direction not in ('toward_empty', 'toward_full'):
-            return {'ok': False, 'error': 'Invalid direction'}
-        if amount_type == 'ml':
-            self.jogger.jog_ml(direction, float(amount))
-        elif amount_type == 'steps':
-            self.jogger.jog_steps(direction, int(amount))
-        else:
-            return {'ok': False, 'error': 'Invalid amount_type'}
-        self.log(f'Jog {direction}, {amount} {amount_type}')
-        return {'ok': True}
-
-    def enable_motor(self):
-        self.stepper.enable()
-        self.log('Motor enabled')
-        return {'ok': True}
-
-    def disable_motor(self):
-        self.stepper.disable()
-        self.log('Motor disabled')
-        return {'ok': True}
-
-    def emergency_stop(self):
-        self.stepper.stop()
-        self.stepper.disable()
-        self.mode = 'stopped'
-        self.log('Emergency stop')
-        return {'ok': True}
+        if direction not in ('toward_empty', 'toward_full'): return {'ok': False, 'error': 'Invalid direction'}
+        if amount_type == 'ml': self.jogger.jog_ml(direction, float(amount))
+        elif amount_type == 'steps': self.jogger.jog_steps(direction, int(amount))
+        else: return {'ok': False, 'error': 'Invalid amount_type'}
+        self.log(f'Jog {direction}, {amount} {amount_type}'); return {'ok': True}
+    def enable_motor(self): self.stepper.enable(); self.log('Motor enabled'); return {'ok': True}
+    def disable_motor(self): self.stepper.disable(); self.log('Motor disabled'); return {'ok': True}
+    def emergency_stop(self): self.flow_stop_requested = True; self.stepper.stop(); self.stepper.disable(); self.mode = 'stopped'; self.log('Emergency stop'); return {'ok': True}

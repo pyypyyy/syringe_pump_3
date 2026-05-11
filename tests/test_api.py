@@ -59,3 +59,11 @@ def test_jog_validation(client):
     resp = client.post('/api/jog', json={'direction': 'bad', 'amount_type': 'ml', 'amount': 1})
     assert resp.status_code == 400
     assert resp.get_json()['ok'] is False
+
+
+def test_flow_start_requires_softpot(client):
+    resp = client.post('/api/flow/start', json={'gas': 'air'})
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data['ok'] is False
+    assert 'Softpot must be calibrated' in data['error']
