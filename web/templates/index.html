@@ -15,6 +15,7 @@
   <p>Aloita softpotin kalibroinnista. Mock-moodissa painikkeet simuloivat ruiskun liikettä.</p>
   <a class="button" href="/softpot">Avaa softpot-kalibrointi</a>
 </section>
+
 <section class="panel">
   <h2>Flow rate calibration (air / CO2)</h2>
   <p>Syötä odotettu virtaus (L/min), valitse kaasu ja tallenna mittauspiste. Lataa CSV lopuksi.</p>
@@ -28,7 +29,38 @@
     <button onclick="resetFlowCalibrationPoints()" class="danger">Tyhjennä pisteet</button>
     <a class="button" href="/api/flow-calibration/csv">Lataa CSV</a>
   </div>
+
+  <div class="calibration-summary" id="calibrationSummaryCards"></div>
+  <p id="calibrationRecommendation" class="recommendation">Lisää pisteitä, niin saat suosituksia seuraavista mittauspisteistä.</p>
+
+  <div class="chart-grid">
+    <div class="chart-card">
+      <h3>Calibration curve (Expected vs Voltage)</h3>
+      <canvas id="curveChart"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>Residuals (Estimated - Expected)</h3>
+      <canvas id="residualChart"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>Repeatability (Expected vs Estimated)</h3>
+      <canvas id="repeatabilityChart"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>Time drift (Capture order vs Estimated)</h3>
+      <canvas id="driftChart"></canvas>
+    </div>
+  </div>
+
+  <div class="coverage-wrap">
+    <h3>Flow range coverage</h3>
+    <div class="coverage-track"><div id="coverageBar" class="coverage-bar"></div></div>
+    <p id="coverageText" class="muted">Ei pisteitä vielä.</p>
+  </div>
+
+  <h3>Captured points</h3>
   <ul id="flowCalibrationList"></ul>
 </section>
+
 <section class="panel"><h2>Tapahtumaloki</h2><ul id="eventLog"></ul></section>
 {% endblock %}
