@@ -4,6 +4,7 @@ from hardware.softpot_reader import SoftpotReader
 from hardware.stepper_driver import StepperDriver
 from motion.jog_controller import JogController
 from motion.softpot_calibrator import SoftpotCalibrator
+from core.calibration_store import FlowCalibrationStore
 from datetime import datetime, timezone
 import csv
 import io
@@ -22,7 +23,25 @@ class CalibrationService:
         self.mode = 'idle'
         self.last_event = 'Application started'
         self.events = [self.last_event]
-        self.flow_calibration_points = []
+        storage_cfg = config.get('storage', {})
+        points_path = storage_cfg.get('flow_points_path', 'data/flow_calibration_points.json')
+        self.flow_store = FlowCalibrationStore(points_path)
+        self.flow_calibration_points = self._safe_load_flow_points()
+
+    def _safe_load_flow_points(self):
+        try:
+            points = self.flow_store.load_points()
+            self.log(f'Loaded {len(points)} persisted flow calibration points')
+            return points
+        except Exception as e:
+            self.log(f'Failed to load persisted flow calibration points: {e}')
+            return []
+
+    def _safe_save_flow_points(self):
+        try:
+            self.flow_store.save_points(self.flow_calibration_points)
+        except Exception as e:
+            self.log(f'Failed to persist flow calibration points: {e}')
 
     def log(self, message):
         self.last_event = message
@@ -68,11 +87,13 @@ class CalibrationService:
             'timestamp': timestamp,
         }
         self.flow_calibration_points.append(point)
+        self._safe_save_flow_points()
         self.log(f"Flow calibration point captured ({gas_name}, expected {expected:.4f} L/min): {measured_voltage:.4f} V")
         return {'ok': True, 'point': point}
 
     def reset_flow_calibration_points(self):
         self.flow_calibration_points = []
+        self._safe_save_flow_points()
         self.log('Flow calibration points reset')
         return {'ok': True}
 
