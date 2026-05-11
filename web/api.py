@@ -56,6 +56,29 @@ def create_api_blueprint(service):
     def stop():
         return jsonify(service.emergency_stop())
 
+
+    @api_bp.post('/flow/start')
+    def flow_start():
+        data, err = parse_json()
+        if err:
+            return err
+        res = service.start_flow_calibration(data)
+        return jsonify(res), (200 if res.get('ok') else 400)
+
+    @api_bp.post('/flow/stop')
+    def flow_stop():
+        return jsonify(service.stop_flow_calibration())
+
+    @api_bp.get('/flow/status')
+    def flow_status():
+        st = service.get_status()
+        keys = ['running','gas','current_trial','completed_trials','total_trials','current_target_flow_lpm','latest_softpot_volume_ml','latest_flow_voltage_v','run_dir']
+        return jsonify({k: st.get(k) for k in keys})
+
+    @api_bp.get('/flow/results')
+    def flow_results():
+        return jsonify(service.flow_results())
+
     @api_bp.post('/flow-calibration/capture')
     def flow_calibration_capture():
         data, err = parse_json()
