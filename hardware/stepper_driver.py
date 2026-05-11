@@ -31,6 +31,7 @@ class StepperDriver:
 
     def enable(self):
         self.enabled = True
+        self.step_position_valid = True
         if self._gpio:
             self._gpio.output(self.enable_pin, 0 if self.enable_active_low else 1)
 

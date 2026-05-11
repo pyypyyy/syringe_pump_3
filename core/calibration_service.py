@@ -79,12 +79,15 @@ class CalibrationService:
     def jog(self, direction, amount_type, amount):
         if direction not in ('toward_empty', 'toward_full'):
             return {'ok': False, 'error': 'Invalid direction'}
-        if amount_type == 'ml':
-            self.jogger.jog_ml(direction, float(amount))
-        elif amount_type == 'steps':
-            self.jogger.jog_steps(direction, int(amount))
-        else:
+        if amount_type not in ('ml', 'steps'):
             return {'ok': False, 'error': 'Invalid amount_type'}
+        try:
+            if amount_type == 'ml':
+                self.jogger.jog_ml(direction, float(amount))
+            else:
+                self.jogger.jog_steps(direction, int(amount))
+        except (TypeError, ValueError):
+            return {'ok': False, 'error': 'Invalid amount'}
         self.log(f'Jog {direction}, {amount} {amount_type}')
         return {'ok': True}
 
