@@ -4,6 +4,9 @@ from hardware.softpot_reader import SoftpotReader
 from hardware.stepper_driver import StepperDriver
 from motion.jog_controller import JogController
 from motion.softpot_calibrator import SoftpotCalibrator
+from datetime import datetime, timezone
+import csv
+import io
 
 
 class CalibrationService:
@@ -19,6 +22,7 @@ class CalibrationService:
         self.mode = 'idle'
         self.last_event = 'Application started'
         self.events = [self.last_event]
+        self.flow_calibration_points = []
 
     def log(self, message):
         self.last_event = message
@@ -45,7 +49,42 @@ class CalibrationService:
             'calibration_targets': self.softpot_calibrator.targets,
             'last_event': self.last_event,
             'events': list(reversed(self.events)),
+            'flow_calibration_points': list(reversed(self.flow_calibration_points)),
         }
+
+    def add_flow_calibration_point(self, gas, expected_flow_lpm):
+        gas_name = str(gas or '').strip().lower()
+        if gas_name not in ('air', 'co2'):
+            return {'ok': False, 'error': "gas must be 'air' or 'co2'"}
+        expected = float(expected_flow_lpm)
+        measured_voltage = self.flow_sensor.read_voltage()
+        estimated_flow = self.flow_sensor.estimate_flow_lpm(measured_voltage)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        point = {
+            'gas': gas_name,
+            'expected_flow_lpm': expected,
+            'measured_voltage_v': measured_voltage,
+            'estimated_flow_lpm': estimated_flow,
+            'timestamp': timestamp,
+        }
+        self.flow_calibration_points.append(point)
+        self.log(f"Flow calibration point captured ({gas_name}, expected {expected:.4f} L/min): {measured_voltage:.4f} V")
+        return {'ok': True, 'point': point}
+
+    def reset_flow_calibration_points(self):
+        self.flow_calibration_points = []
+        self.log('Flow calibration points reset')
+        return {'ok': True}
+
+    def flow_calibration_csv(self):
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=[
+            'gas', 'expected_flow_lpm', 'measured_voltage_v', 'estimated_flow_lpm', 'timestamp'
+        ])
+        writer.writeheader()
+        for point in self.flow_calibration_points:
+            writer.writerow(point)
+        return output.getvalue()
 
     def start_softpot_calibration(self):
         self.mode = 'softpot_calibration'

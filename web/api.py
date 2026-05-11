@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 
 
 def create_api_blueprint(service):
@@ -36,5 +36,23 @@ def create_api_blueprint(service):
     @api_bp.post('/stop')
     def stop():
         return jsonify(service.emergency_stop())
+
+    @api_bp.post('/flow-calibration/capture')
+    def flow_calibration_capture():
+        data = request.get_json(force=True) or {}
+        return jsonify(service.add_flow_calibration_point(data.get('gas'), data.get('expected_flow_lpm')))
+
+    @api_bp.post('/flow-calibration/reset')
+    def flow_calibration_reset():
+        return jsonify(service.reset_flow_calibration_points())
+
+    @api_bp.get('/flow-calibration/csv')
+    def flow_calibration_csv():
+        csv_data = service.flow_calibration_csv()
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': 'attachment; filename=flow_calibration_points.csv'},
+        )
 
     return api_bp
