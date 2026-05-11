@@ -4,6 +4,14 @@ from flask import Blueprint, jsonify, request, Response
 def create_api_blueprint(service):
     api_bp = Blueprint('api', __name__)
 
+    def error(message, status=400):
+        return jsonify({'ok': False, 'error': message}), status
+
+    def parse_json():
+        if not request.is_json:
+            return None, error('Request must be JSON')
+        return request.get_json(silent=True) or {}, None
+
     @api_bp.get('/status')
     def status():
         return jsonify(service.get_status())
@@ -22,8 +30,19 @@ def create_api_blueprint(service):
 
     @api_bp.post('/jog')
     def jog():
-        data = request.get_json(force=True) or {}
-        return jsonify(service.jog(data.get('direction'), data.get('amount_type'), data.get('amount')))
+        data, err = parse_json()
+        if err:
+            return err
+        direction = data.get('direction')
+        amount_type = data.get('amount_type')
+        amount = data.get('amount')
+        if direction not in ('toward_empty', 'toward_full'):
+            return error("direction must be 'toward_empty' or 'toward_full'")
+        if amount_type not in ('ml', 'steps'):
+            return error("amount_type must be 'ml' or 'steps'")
+        if amount is None:
+            return error('amount is required')
+        return jsonify(service.jog(direction, amount_type, amount))
 
     @api_bp.post('/motor/enable')
     def motor_enable():
@@ -39,8 +58,20 @@ def create_api_blueprint(service):
 
     @api_bp.post('/flow-calibration/capture')
     def flow_calibration_capture():
-        data = request.get_json(force=True) or {}
-        return jsonify(service.add_flow_calibration_point(data.get('gas'), data.get('expected_flow_lpm')))
+        data, err = parse_json()
+        if err:
+            return err
+        gas = data.get('gas')
+        expected = data.get('expected_flow_lpm')
+        if gas not in ('air', 'co2'):
+            return error("gas must be 'air' or 'co2'")
+        if expected is None:
+            return error('expected_flow_lpm is required')
+        try:
+            expected = float(expected)
+        except (TypeError, ValueError):
+            return error('expected_flow_lpm must be numeric')
+        return jsonify(service.add_flow_calibration_point(gas, expected))
 
     @api_bp.post('/flow-calibration/reset')
     def flow_calibration_reset():
