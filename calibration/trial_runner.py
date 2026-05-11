@@ -1,4 +1,5 @@
 import time
+import logging
 from collections import deque
 from datetime import datetime, timezone
 
@@ -66,6 +67,13 @@ class TrialRunner:
         steps_per_ml = float(self.config.get('axis', {}).get('microsteps_per_ml', 208.0))
         total_steps = int(stroke_ml * steps_per_ml)
         step_delay_s = max(0.0001, duration_s / max(total_steps, 1))
+        target_step_rate_hz = (total_steps / max(duration_s, 1e-9)) if total_steps > 0 else 0.0
+        backend_name = getattr(getattr(self.stepper, 'pulse_backend', None), 'name', 'rpi_gpio' if self.stepper.mode == 'raspberry_pi' else 'mock')
+        if target_step_rate_hz > 1000 and backend_name == 'rpi_gpio':
+            logging.getLogger(__name__).warning(
+                'Target step rate %.0f Hz is high for RPi.GPIO timing. Use pigpio backend for reliable calibration.',
+                target_step_rate_hz,
+            )
         if hasattr(self.flow_sensor, 'set_mock_active_flow'):
             self.flow_sensor.set_mock_active_flow(trial.target_flow_lpm)
 
@@ -91,14 +99,15 @@ class TrialRunner:
             if status == 'completed':
                 self.stepper.enable()
                 direction_toward_empty = trial.stroke_end_ml < trial.stroke_start_ml
-                for i in range(total_steps):
+                moved_steps = self.stepper.move_steps_timed(total_steps, direction_toward_empty, duration_s)
+                sample_every = max(1, int(sample_interval_s / max(step_delay_s, 1e-6)))
+                for i in range(moved_steps):
                     if self.stop_checker():
                         status = 'aborted'; reason = 'User stop requested during stroke'; break
-                    self.stepper.move_steps(1, direction_toward_empty, step_delay_s=step_delay_s)
                     if self.softpot.mode == 'mock':
                         delta = -1.0 / steps_per_ml if direction_toward_empty else 1.0 / steps_per_ml
                         self.softpot.adjust_mock_volume(delta)
-                    if i % max(1, int(sample_interval_s / max(step_delay_s, 1e-6))) == 0:
+                    if i % sample_every == 0:
                         row = self._sample(trial, t0, 'moving', flow_window, window_s)
                         rows.append(row)
                         logger.write(row)

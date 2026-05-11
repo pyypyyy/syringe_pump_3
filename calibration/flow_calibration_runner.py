@@ -3,6 +3,7 @@ import csv
 import json
 import time
 from datetime import datetime
+from collections import defaultdict
 
 from calibration.calibration_plan import CalibrationPlan
 from calibration.trial_runner import TrialRunner
@@ -53,6 +54,19 @@ class FlowCalibrationRunner:
         min_samples = int(qc.get('min_stable_samples', 10)); min_duration = float(qc.get('min_stable_duration_s', 1.0)); min_nonzero = float(qc.get('min_nonzero_flow_lpm', 0.001)); max_cv = float(qc.get('max_flow_cv', 0.15))
         summaries = []; trials_meta = []
         for idx, trial in enumerate(trials, start=1):
+            self.status_callback(
+                current_trial={
+                    'gas': trial.gas,
+                    'target_flow_lpm': trial.target_flow_lpm,
+                    'repeat_index': trial.repeat_index,
+                    'stroke_start_ml': trial.stroke_start_ml,
+                    'stroke_end_ml': trial.stroke_end_ml,
+                },
+                completed_trials=idx - 1,
+                total_trials=len(trials),
+                current_target_flow_lpm=trial.target_flow_lpm,
+                run_dir=str(run_dir),
+            )
             res = trial_runner.run_trial(trial, run_dir / f'{trial.trial_id}.csv')
             tstatus = res['status']; reason = res.get('reason'); stats = None
             if tstatus == 'completed':
@@ -69,13 +83,25 @@ class FlowCalibrationRunner:
                 entry.update(stats)
                 summaries.append(entry)
             trials_meta.append(entry)
+            self.status_callback(completed_trials=idx, recent_trials=trials_meta[-5:])
             if self.stop_checker():
                 break
 
         with (run_dir / 'summary.csv').open('w', newline='', encoding='utf-8') as f:
             if summaries:
                 w = csv.DictWriter(f, fieldnames=list(summaries[0].keys())); w.writeheader(); w.writerows(summaries)
-        curve_points = [{'target_flow_lpm': s['target_flow_lpm'], 'actual_flow_lpm': s['actual_flow_lpm'], 'mean_voltage_v': s['mean_flow_voltage_v'], 'std_voltage_v': s['std_flow_voltage_v'], 'repeat_count': 1} for s in summaries]
+        groups = defaultdict(list)
+        for s in summaries:
+            groups[(s['gas'], s['target_flow_lpm'])].append(s)
+        curve_points = []
+        for (_, target_flow), group in sorted(groups.items(), key=lambda x: x[0][1]):
+            n = len(group)
+            mean_actual = sum(x['actual_flow_lpm'] for x in group) / n
+            mean_voltage = sum(x['mean_flow_voltage_v'] for x in group) / n
+            std_actual = (sum((x['actual_flow_lpm'] - mean_actual) ** 2 for x in group) / n) ** 0.5
+            std_voltage = (sum((x['mean_flow_voltage_v'] - mean_voltage) ** 2 for x in group) / n) ** 0.5
+            cv = std_actual / mean_actual if mean_actual > 1e-9 else 0.0
+            curve_points.append({'target_flow_lpm': target_flow, 'actual_flow_lpm': mean_actual, 'std_actual_flow_lpm': std_actual, 'mean_voltage_v': mean_voltage, 'std_voltage_v': std_voltage, 'repeat_count': n, 'coefficient_of_variation': cv})
         curve_points.append({'target_flow_lpm': 0.0, 'actual_flow_lpm': 0.0, 'mean_voltage_v': zero_capture['zero_voltage_mean_v'], 'std_voltage_v': zero_capture['zero_voltage_std_v'], 'repeat_count': 1, 'zero_flow_anchor': True})
         curve = build_piecewise_curve(gas, curve_points)
         curve['zero_flow'] = zero_capture
