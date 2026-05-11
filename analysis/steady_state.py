@@ -1,52 +1,27 @@
 def filter_stable_rows(rows, min_ml, max_ml):
-    candidates = [
+    return [
         r for r in rows
         if ('motion_phase' not in r or r.get('motion_phase') == 'moving')
-        if min_ml <= float(r['softpot_volume_ml']) <= max_ml
+        and min_ml <= float(r['softpot_volume_ml']) <= max_ml
     ]
-    flows = [float(r.get('actual_flow_lpm_window', 0.0)) for r in candidates if float(r.get('actual_flow_lpm_window', 0.0)) > 0]
-    if not flows:
-        return []
-    sorted_flows = sorted(flows)
-    median = sorted_flows[len(sorted_flows) // 2]
-    tolerance = max(0.002, 0.35 * median)
-    return [
-        r for r in candidates
-        if float(r.get('actual_flow_lpm_window', 0.0)) > 0 and abs(float(r.get('actual_flow_lpm_window', 0.0)) - median) <= tolerance
-    ]
-
-
-def compute_actual_flow_lpm(rows):
-    if len(rows) < 2:
-        return 0.0
-    start = rows[0]
-    end = rows[-1]
-    dv = abs(float(end['softpot_volume_ml']) - float(start['softpot_volume_ml']))
-    dt = abs(float(end['elapsed_s']) - float(start['elapsed_s']))
-    if dt <= 1e-9:
-        return 0.0
-    return dv / dt * 60.0 / 1000.0
 
 
 def summarize_trial(rows):
     if not rows:
-        return {
-            'mean_flow_voltage_v': 0.0,
-            'std_flow_voltage_v': 0.0,
-            'actual_flow_lpm': 0.0,
-            'std_actual_flow_lpm': 0.0,
-            'sample_count': 0,
-        }
+        return {'status': 'invalid', 'reason': 'Stable region is empty', 'sample_count': 0}
     vs = [float(r['flow_voltage_v']) for r in rows]
     actuals = [float(r.get('actual_flow_lpm_window', 0.0)) for r in rows]
+    ts = [float(r.get('elapsed_s', 0.0)) for r in rows]
+    vols = [float(r.get('softpot_volume_ml', 0.0)) for r in rows]
     mean_v = sum(vs) / len(vs)
-    var_v = sum((v - mean_v) ** 2 for v in vs) / len(vs)
     mean_a = sum(actuals) / len(actuals)
-    var_a = sum((a - mean_a) ** 2 for a in actuals) / len(actuals)
+    std_v = (sum((v - mean_v) ** 2 for v in vs) / len(vs)) ** 0.5
+    std_a = (sum((a - mean_a) ** 2 for a in actuals) / len(actuals)) ** 0.5
+    duration = max(ts) - min(ts) if len(ts) > 1 else 0.0
+    actual_flow = abs(vols[-1] - vols[0]) / max(duration, 1e-9) * 60.0 / 1000.0
+    cv = std_a / mean_a if mean_a > 1e-9 else 999.0
     return {
-        'mean_flow_voltage_v': mean_v,
-        'std_flow_voltage_v': var_v ** 0.5,
-        'actual_flow_lpm': compute_actual_flow_lpm(rows),
-        'std_actual_flow_lpm': var_a ** 0.5,
-        'sample_count': len(rows),
+        'status': 'completed', 'reason': None, 'sample_count': len(rows), 'stable_duration_s': duration,
+        'mean_flow_voltage_v': mean_v, 'std_flow_voltage_v': std_v, 'actual_flow_lpm': actual_flow,
+        'std_actual_flow_lpm': std_a, 'flow_cv': cv, 'volume_start_ml': vols[0], 'volume_end_ml': vols[-1],
     }

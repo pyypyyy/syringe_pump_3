@@ -57,6 +57,16 @@ def create_api_blueprint(service):
         return jsonify(service.emergency_stop())
 
 
+
+    @api_bp.post('/flow/zero-capture')
+    def flow_zero_capture():
+        data, err = parse_json()
+        if err:
+            return err
+        gas = str(data.get('gas', 'air')).lower()
+        res = service.capture_zero_flow(gas)
+        return jsonify(res), (200 if res.get('ok') else 400)
+
     @api_bp.post('/flow/start')
     def flow_start():
         data, err = parse_json()

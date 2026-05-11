@@ -71,12 +71,14 @@ def test_flow_start_requires_softpot(client):
 
 def test_flow_start_accepts_air(client):
     client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    client.post('/api/flow/zero-capture', json={'gas':'air'})
     resp = client.post('/api/flow/start', json={'gas':'air','flows_lpm':[0.02],'repeats':1})
     assert resp.status_code == 200
 
 
 def test_flow_start_accepts_co2(client):
     client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    client.post('/api/flow/zero-capture', json={'gas':'co2'})
     resp = client.post('/api/flow/start', json={'gas':'co2','flows_lpm':[0.02],'repeats':1})
     assert resp.status_code == 200
 
@@ -114,6 +116,7 @@ def test_flow_failed_motion_sets_error_and_not_running(client, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError('motion failed')
     monkeypatch.setattr(FlowCalibrationRunner, 'run', boom)
+    client.post('/api/flow/zero-capture', json={'gas':'air'})
     resp = client.post('/api/flow/start', json={'gas':'air','flows_lpm':[0.02],'repeats':1})
     assert resp.status_code == 200
     import time

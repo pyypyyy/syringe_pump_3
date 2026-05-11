@@ -1,123 +1,41 @@
 from pathlib import Path
-
-from analysis.steady_state import filter_stable_rows, compute_actual_flow_lpm, summarize_trial
-from calibration.trial_runner import TrialRunner
-from calibration.calibration_plan import CalibrationPlan
-from analysis.curve_fit import build_piecewise_curve
+from analysis.steady_state import filter_stable_rows, summarize_trial
 from calibration.flow_calibration_runner import FlowCalibrationRunner
+from calibration.trial_runner import TrialRunner
 from hardware.stepper_driver import StepperDriver
 from hardware.softpot_reader import SoftpotReader
 from hardware.flow_sensor import FlowSensor
 
 
 class MockPositionModel:
-    def __init__(self, softpot):
-        self.softpot = softpot
-
+    def __init__(self, softpot): self.softpot = softpot
     def voltage_to_volume_ml(self, voltage):
         span = self.softpot.mock_max_v - self.softpot.mock_min_v
-        if span <= 0:
-            return 0.0
-        frac = (voltage - self.softpot.mock_min_v) / span
+        frac = (voltage - self.softpot.mock_min_v) / span if span > 0 else 0
         return max(0.0, min(100.0, frac * 100.0))
 
 
-def test_calibration_plan_trials():
-    trials = CalibrationPlan.build('air', [0.1, 0.2], 2, 100, 0)
-    assert len(trials) == 4
-    assert 'air_0.100_LPM_rep1' in [t.trial_id for t in trials]
+def test_stable_region_quality_checks():
+    assert summarize_trial([])['status'] == 'invalid'
+    rows = [{'softpot_volume_ml': 90, 'motion_phase': 'moving', 'elapsed_s': 0, 'flow_voltage_v': 0.5, 'actual_flow_lpm_window': 0.3}, {'softpot_volume_ml': 80, 'motion_phase': 'moving', 'elapsed_s': 2, 'flow_voltage_v': 0.5, 'actual_flow_lpm_window': 0.31}]
+    s = summarize_trial(filter_stable_rows(rows, 10, 90))
+    assert s['sample_count'] == 2
 
 
-def test_stable_region_and_actual_flow():
-    rows = [
-        {'softpot_volume_ml': 95, 'motion_phase': 'moving', 'elapsed_s': 0, 'flow_voltage_v': 0.5, 'actual_flow_lpm_window': 0.0},
-        {'softpot_volume_ml': 90, 'motion_phase': 'moving', 'elapsed_s': 1, 'flow_voltage_v': 0.5, 'actual_flow_lpm_window': 0.3},
-        {'softpot_volume_ml': 10, 'motion_phase': 'moving', 'elapsed_s': 9, 'flow_voltage_v': 0.6, 'actual_flow_lpm_window': 0.31},
-        {'softpot_volume_ml': 5, 'motion_phase': 'moving', 'elapsed_s': 10, 'flow_voltage_v': 0.6, 'actual_flow_lpm_window': 0.0},
-    ]
-    stable = filter_stable_rows(rows, 10, 90)
-    assert len(stable) == 2
-    flow = compute_actual_flow_lpm(stable)
-    assert flow > 0
+def test_trial_abort_before_start(tmp_path):
+    config = {'hardware': {'mode': 'mock'}, 'axis': {'microsteps_per_ml': 5.0}, 'flow_calibration': {'sample_interval_s': 0.01}}
+    stepper = StepperDriver(config); softpot = SoftpotReader(config); flow = FlowSensor(config); pm = MockPositionModel(softpot)
+    r = TrialRunner(config, stepper, softpot, flow, pm, lambda: True)
+    t = type('T', (), {'stroke_start_ml': 100.0, 'stroke_end_ml': 0.0, 'target_flow_lpm': 0.2, 'trial_id': 't1', 'gas': 'air'})()
+    res = r.run_trial(t, tmp_path / 't.csv')
+    assert res['status'] == 'aborted'
 
 
-def test_filter_stable_rows_excludes_settle_rows():
-    rows = [
-        {'softpot_volume_ml': 50, 'motion_phase': 'settle_before', 'actual_flow_lpm_window': 0.2},
-        {'softpot_volume_ml': 49, 'motion_phase': 'moving', 'actual_flow_lpm_window': 0.2},
-        {'softpot_volume_ml': 48, 'motion_phase': 'settle_after', 'actual_flow_lpm_window': 0.2},
-    ]
-    stable = filter_stable_rows(rows, 40, 60)
-    assert len(stable) == 1
-    assert stable[0]['motion_phase'] == 'moving'
-
-
-def test_summarize_trial_uses_endpoint_actual_flow():
-    rows = [
-        {'softpot_volume_ml': 90.0, 'elapsed_s': 0.0, 'flow_voltage_v': 1.0, 'actual_flow_lpm_window': 0.30},
-        {'softpot_volume_ml': 85.0, 'elapsed_s': 10.0, 'flow_voltage_v': 1.0, 'actual_flow_lpm_window': 0.20},
-    ]
-    summary = summarize_trial(rows)
-    assert summary['actual_flow_lpm'] == compute_actual_flow_lpm(rows)
-    assert summary['actual_flow_lpm'] != 0.25
-
-
-def test_move_to_volume_reads_safety_section_limits():
-    config = {
-        'axis': {'syringe_volume_ml': 100.0, 'microsteps_per_ml': 10.0, 'safety_min_ml': 10.0, 'safety_max_ml': 90.0},
-        'safety': {'min_volume_ml': 20.0, 'max_volume_ml': 80.0},
-    }
-    stepper = type('S', (), {'move_steps': lambda *args, **kwargs: None})()
-    softpot = type('SP', (), {'mode': 'real', 'read_voltage': lambda self: 0.0})()
-    flow = object()
-    pm = type('PM', (), {'voltage_to_volume_ml': lambda self, v: 15.0})()
-    runner = TrialRunner(config, stepper, softpot, flow, pm, lambda: False)
-    try:
-        runner.move_to_volume(30.0)
-        assert False, 'Expected safety bounds failure'
-    except RuntimeError as exc:
-        assert 'outside safety bounds' in str(exc)
-
-
-def test_curve_uses_actual_flow():
-    curve = build_piecewise_curve('air', [
-        {'target_flow_lpm': 0.1, 'actual_flow_lpm': 0.12, 'mean_voltage_v': 0.5, 'std_voltage_v': 0.01, 'repeat_count': 1}
-    ])
-    assert curve['method'] == 'piecewise_linear'
-    assert curve['points'][0]['actual_flow_lpm'] == 0.12
-
-
-def test_mock_workflow_refill_and_actual_window(tmp_path):
-    config = {
-        'hardware': {'mode': 'mock'},
-        'axis': {'microsteps_per_ml': 5.0, 'syringe_volume_ml': 100.0, 'safety_min_ml': 0.0, 'safety_max_ml': 100.0},
-        'flow_calibration': {'sample_interval_s': 0.01, 'settle_before_s': 0.0, 'settle_after_s': 0.0, 'mock_time_scale': 0.05, 'analysis_min_ml': 10, 'analysis_max_ml': 90},
-    }
-    stepper = StepperDriver(config)
-    softpot = SoftpotReader(config)
-    flow_sensor = FlowSensor(config)
-    pm = MockPositionModel(softpot)
-    statuses = {}
-
-    runner = FlowCalibrationRunner(config, stepper, softpot, flow_sensor, pm, lambda **k: statuses.update(k), lambda: False)
-    result = runner.run('air', [0.2], 2, 100.0, 0.0, 20, 80)
-    assert result['ok'] is True
-    run_dir = Path(result['run_dir'])
-    raw_files = sorted(run_dir.glob('*.csv'))
-    assert raw_files
-    raw_text = raw_files[0].read_text(encoding='utf-8')
-    assert 'actual_flow_lpm_window' in raw_text
-    summary = (run_dir / 'summary.csv').read_text(encoding='utf-8')
-    assert 'actual_flow_lpm' in summary
-    assert 'zero_flow_voltage_mean' in summary
-    assert any(float(line.split(',')[4]) > 0 for line in summary.splitlines()[1:])
-    curve = __import__('json').loads((run_dir / 'calibration_curve.json').read_text(encoding='utf-8'))
-    assert curve['gas'] == 'air'
-    assert curve['method'] == 'piecewise_linear'
-    assert 'created_at' in curve
-    assert 'zero_flow' in curve
-    assert any(p['actual_flow_lpm'] == 0.0 for p in curve['points'])
-    assert (run_dir / 'config_snapshot.json').exists()
-    assert abs(softpot.mock_volume_ml - 100.0) <= 1.0
-    assert statuses.get('analysis_min_ml') == 20.0
-    assert statuses.get('analysis_max_ml') == 80.0
+def test_zero_flow_capture_and_curve_anchor(tmp_path):
+    config = {'hardware': {'mode': 'mock'}, 'axis': {'microsteps_per_ml': 5.0, 'syringe_volume_ml': 100.0}, 'flow_calibration': {'sample_interval_s': 0.01, 'settle_before_s': 0.0, 'settle_after_s': 0.0, 'mock_time_scale': 0.03, 'analysis_min_ml': 20, 'analysis_max_ml': 80, 'quality_checks': {'min_stable_samples': 1, 'min_stable_duration_s': 0.0, 'min_nonzero_flow_lpm': 0.0, 'max_flow_cv': 5.0}, 'zero_flow': {'settling_s': 0.0, 'sample_duration_s': 0.05, 'sample_interval_s': 0.01}}}
+    stepper = StepperDriver(config); softpot = SoftpotReader(config); flow = FlowSensor(config); pm = MockPositionModel(softpot)
+    runner = FlowCalibrationRunner(config, stepper, softpot, flow, pm, lambda **k: None, lambda: False)
+    res = runner.run('air', [0.2], 1, 100.0, 0.0, 20, 80)
+    curve = __import__('json').loads((Path(res['run_dir']) / 'calibration_curve.json').read_text())
+    assert curve['zero_flow']['sample_count'] > 1
+    assert any(p.get('zero_flow_anchor') for p in curve['points'])

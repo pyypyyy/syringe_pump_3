@@ -16,7 +16,7 @@ Tiedostot ovat oikeissa paikoissa:
 ## Käynnistys
 
 ```bash
-cd gasflow_calibrator_fixed
+cd <project-folder>
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -27,7 +27,7 @@ python app.py
 Windows PowerShell:
 
 ```powershell
-cd gasflow_calibrator_fixed
+cd <project-folder>
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt

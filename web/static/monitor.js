@@ -263,3 +263,5 @@ function renderAutomaticFlowStatus(data){
   if (fc.result?.run_dir){ setText('flowSummaryPath', `${fc.result.run_dir}/summary.csv`); setText('flowCurvePath', `${fc.result.run_dir}/calibration_curve.json`); }
   const el=document.getElementById('flowRecentTrials'); if(el){ el.innerHTML=''; for(const t of (fc.recent_trials||[])){ const li=document.createElement('li'); li.textContent=`${t.trial_id}: target ${t.target_flow_lpm}, actual ${fmt(t.actual_flow_lpm,4,' L/min')}, V ${fmt(t.mean_voltage_v,4,' V')}`; el.appendChild(li);} }
 }
+
+async function captureZeroFlow(){ const gas=document.getElementById('autoFlowGas')?.value||'air'; return postJson('/api/flow/zero-capture',{gas}); }

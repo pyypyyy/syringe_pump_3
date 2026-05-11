@@ -11,7 +11,7 @@
     <input id="strokeStartMl" type="number" value="100"><input id="strokeEndMl" type="number" value="0">
     <input id="analysisMinMl" type="number" value="10"><input id="analysisMaxMl" type="number" value="90">
   </div>
-  <div class="button-row"><button onclick="startAutomaticFlowCalibration()">Start automatic calibration</button><button class="danger" onclick="stopAutomaticFlowCalibration()">Stop calibration</button><button class="danger" onclick="postJson('/api/stop', {})">Emergency stop</button></div>
+  <div class="button-row"><button onclick="captureZeroFlow()">Capture zero</button><button onclick="startAutomaticFlowCalibration()">Start automatic calibration</button><button class="danger" onclick="stopAutomaticFlowCalibration()">Stop calibration</button><button class="danger" onclick="postJson('/api/stop', {})">Emergency stop</button></div>
 </section>
 <section class="panel"><h3>Status</h3>
 <ul>
