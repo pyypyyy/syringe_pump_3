@@ -87,6 +87,19 @@ def test_flow_start_rejects_invalid_gas(client):
     assert resp.status_code == 400
 
 
+def test_flow_start_rejects_invalid_payloads(client):
+    client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    bad_payloads = [
+        {'gas': 'air', 'flows_lpm': []},
+        {'gas': 'air', 'flows_lpm': [0.1], 'repeats': 0},
+        {'gas': 'air', 'flows_lpm': [0.1], 'analysis_min_ml': 80, 'analysis_max_ml': 20},
+        {'gas': 'air', 'flows_lpm': [0.1], 'stroke_start_ml': 100, 'stroke_end_ml': 0, 'analysis_min_ml': -1, 'analysis_max_ml': 20},
+    ]
+    for payload in bad_payloads:
+        resp = client.post('/api/flow/start', json=payload)
+        assert resp.status_code == 400
+
+
 def test_flow_stop_and_status(client):
     resp = client.post('/api/flow/stop', json={})
     assert resp.status_code == 200

@@ -1,6 +1,7 @@
 from pathlib import Path
 import csv
 import json
+import time
 from datetime import datetime
 
 from calibration.calibration_plan import CalibrationPlan
@@ -24,18 +25,39 @@ class FlowCalibrationRunner:
         run_id = f'flow_calibration_{gas}_{ts}'
         run_dir = Path('output/raw') / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        run_config = {
+            'gas': gas,
+            'flows_lpm': flows_lpm,
+            'repeats': repeats,
+            'stroke_start_ml': stroke_start_ml,
+            'stroke_end_ml': stroke_end_ml,
+            'analysis_min_ml': analysis_min_ml,
+            'analysis_max_ml': analysis_max_ml,
+            'resolved_config': self.config,
+        }
+        with (run_dir / 'config_snapshot.json').open('w', encoding='utf-8') as f:
+            json.dump(run_config, f, indent=2)
         trials = CalibrationPlan.build(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml)
         trial_runner = TrialRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self.stop_checker, self.status_callback)
         fc = self.config.get('flow_calibration', {})
         min_ml = float(analysis_min_ml if analysis_min_ml is not None else fc.get('analysis_min_ml', 10.0))
         max_ml = float(analysis_max_ml if analysis_max_ml is not None else fc.get('analysis_max_ml', 90.0))
         summaries = []
+        zero_settle_s = float(fc.get('zero_flow_settle_s', fc.get('settle_before_s', 1.0)))
+        zero_samples = max(1, int(zero_settle_s / max(float(fc.get('sample_interval_s', 0.05)), 1e-6)))
+        zero_flow_voltages = []
+        self.stepper.stop()
+        for _ in range(zero_samples):
+            zero_flow_voltages.append(float(self.flow_sensor.read_voltage()))
+            time.sleep(max(float(fc.get('sample_interval_s', 0.05)), 0.0))
+        zero_flow_voltage_mean = sum(zero_flow_voltages) / len(zero_flow_voltages)
         for idx, trial in enumerate(trials, start=1):
             self.status_callback(running=True, gas=gas, current_trial={'trial_id': trial.trial_id, 'target_flow_lpm': trial.target_flow_lpm, 'repeat_index': trial.repeat_index}, completed_trials=idx-1, total_trials=len(trials), current_target_flow_lpm=trial.target_flow_lpm, run_dir=str(run_dir))
             rows = trial_runner.run_trial(trial, run_dir / f'{trial.trial_id}.csv')
             stable = filter_stable_rows(rows, min_ml, max_ml)
             stats = summarize_trial(stable)
             summaries.append({
+                'zero_flow_voltage_mean': zero_flow_voltage_mean,
                 'gas': gas,
                 'trial_id': trial.trial_id,
                 'target_flow_lpm': trial.target_flow_lpm,
@@ -52,9 +74,8 @@ class FlowCalibrationRunner:
                 break
 
         with (run_dir / 'summary.csv').open('w', newline='', encoding='utf-8') as f:
-            w = csv.DictWriter(f, fieldnames=['gas', 'trial_id', 'target_flow_lpm', 'repeat_index', 'actual_flow_lpm', 'mean_voltage_v', 'std_voltage_v', 'actual_flow_std_lpm', 'sample_count'])
+            w = csv.DictWriter(f, fieldnames=['gas', 'trial_id', 'target_flow_lpm', 'repeat_index', 'actual_flow_lpm', 'mean_voltage_v', 'std_voltage_v', 'actual_flow_std_lpm', 'sample_count', 'zero_flow_voltage_mean'])
             w.writeheader(); w.writerows(summaries)
-
         grouped = {}
         for s in summaries:
             key = (s['gas'], s['target_flow_lpm'])
@@ -68,11 +89,25 @@ class FlowCalibrationRunner:
                 'std_voltage_v': sum(v['std_voltage_v'] for v in vals) / len(vals),
                 'repeat_count': len(vals),
             })
+        if bool(fc.get('include_zero_flow_anchor', True)):
+            curve_points.append({
+                'target_flow_lpm': 0.0,
+                'actual_flow_lpm': 0.0,
+                'mean_voltage_v': zero_flow_voltage_mean,
+                'std_voltage_v': 0.0,
+                'repeat_count': 1,
+                'zero_flow_anchor': True,
+            })
         curve = build_piecewise_curve(gas, curve_points)
+        curve['zero_flow'] = {
+            'voltage_mean_v': zero_flow_voltage_mean,
+            'sample_count': len(zero_flow_voltages),
+            'settle_s': zero_settle_s,
+        }
         with (run_dir / 'calibration_curve.json').open('w', encoding='utf-8') as f:
             json.dump(curve, f, indent=2)
         with (run_dir / 'calibration_curve.csv').open('w', newline='', encoding='utf-8') as f:
-            w = csv.DictWriter(f, fieldnames=['target_flow_lpm', 'actual_flow_lpm', 'mean_voltage_v', 'std_voltage_v', 'repeat_count'])
+            w = csv.DictWriter(f, fieldnames=['target_flow_lpm', 'actual_flow_lpm', 'mean_voltage_v', 'std_voltage_v', 'repeat_count', 'zero_flow_anchor'])
             w.writeheader(); w.writerows(curve['points'])
 
         self.status_callback(running=False, gas=gas, current_trial=None, completed_trials=len(summaries), total_trials=len(trials), current_target_flow_lpm=None, run_dir=str(run_dir), result={'run_dir': str(run_dir), 'curve': curve}, recent_trials=summaries[-10:], analysis_min_ml=min_ml, analysis_max_ml=max_ml)

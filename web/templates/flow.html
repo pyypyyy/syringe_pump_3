@@ -23,8 +23,8 @@
 </ul></section>
 <section class="panel"><h3>Recent trial summaries</h3><ul id="flowRecentTrials"></ul></section>
 <section class="panel">
-<h2>Manual calibration point logger</h2>
-<div class="button-row"><select id="flowCalGas"><option value="air">air</option><option value="co2">co2</option></select><input id="flowCalExpected" type="number" min="0" step="0.001" placeholder="Expected L/min"><button onclick="captureFlowCalibrationPoint()">Tallenna piste</button><button onclick="resetFlowCalibrationPoints()" class="danger">Tyhjennä pisteet</button><a class="button" href="/api/flow-calibration/csv">Lataa CSV</a></div>
+<h2>Manual voltage check</h2>
+<div class="button-row"><select id="flowCalGas"><option value="air">air</option><option value="co2">co2</option></select><input id="flowCalExpected" type="number" min="0" step="0.001" placeholder="Expected L/min"><button onclick="captureFlowCalibrationPoint()">Save manual point</button><button onclick="resetFlowCalibrationPoints()" class="danger">Tyhjennä pisteet</button><a class="button" href="/api/flow-calibration/csv">Lataa CSV</a></div>
 <ul id="flowCalibrationList"></ul>
 </section>
 {% endblock %}
