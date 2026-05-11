@@ -1,8 +1,17 @@
-
 def filter_stable_rows(rows, min_ml, max_ml):
-    return [
+    candidates = [
         r for r in rows
-        if min_ml <= float(r['softpot_volume_ml']) <= max_ml and r.get('motion_phase') == 'constant'
+        if min_ml <= float(r['softpot_volume_ml']) <= max_ml
+    ]
+    flows = [float(r.get('actual_flow_lpm_window', 0.0)) for r in candidates if float(r.get('actual_flow_lpm_window', 0.0)) > 0]
+    if not flows:
+        return []
+    sorted_flows = sorted(flows)
+    median = sorted_flows[len(sorted_flows) // 2]
+    tolerance = max(0.002, 0.35 * median)
+    return [
+        r for r in candidates
+        if float(r.get('actual_flow_lpm_window', 0.0)) > 0 and abs(float(r.get('actual_flow_lpm_window', 0.0)) - median) <= tolerance
     ]
 
 
@@ -24,14 +33,19 @@ def summarize_trial(rows):
             'mean_flow_voltage_v': 0.0,
             'std_flow_voltage_v': 0.0,
             'actual_flow_lpm': 0.0,
+            'std_actual_flow_lpm': 0.0,
             'sample_count': 0,
         }
     vs = [float(r['flow_voltage_v']) for r in rows]
+    actuals = [float(r.get('actual_flow_lpm_window', 0.0)) for r in rows]
     mean_v = sum(vs) / len(vs)
-    var = sum((v - mean_v) ** 2 for v in vs) / len(vs)
+    var_v = sum((v - mean_v) ** 2 for v in vs) / len(vs)
+    mean_a = sum(actuals) / len(actuals)
+    var_a = sum((a - mean_a) ** 2 for a in actuals) / len(actuals)
     return {
         'mean_flow_voltage_v': mean_v,
-        'std_flow_voltage_v': var ** 0.5,
-        'actual_flow_lpm': compute_actual_flow_lpm(rows),
+        'std_flow_voltage_v': var_v ** 0.5,
+        'actual_flow_lpm': mean_a,
+        'std_actual_flow_lpm': var_a ** 0.5,
         'sample_count': len(rows),
     }

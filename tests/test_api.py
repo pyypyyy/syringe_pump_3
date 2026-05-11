@@ -92,3 +92,19 @@ def test_flow_stop_and_status(client):
     assert resp.status_code == 200
     st = client.get('/api/flow/status').get_json()
     assert 'running' in st
+
+
+def test_flow_failed_motion_sets_error_and_not_running(client, monkeypatch):
+    svc = client.application.config['SERVICE']
+    svc.position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    from calibration.flow_calibration_runner import FlowCalibrationRunner
+    def boom(*args, **kwargs):
+        raise RuntimeError('motion failed')
+    monkeypatch.setattr(FlowCalibrationRunner, 'run', boom)
+    resp = client.post('/api/flow/start', json={'gas':'air','flows_lpm':[0.02],'repeats':1})
+    assert resp.status_code == 200
+    import time
+    time.sleep(0.05)
+    st = client.get('/api/flow/status').get_json()
+    assert st['running'] is False
+    assert 'motion failed' in (st.get('error') or '')

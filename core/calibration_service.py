@@ -65,7 +65,7 @@ class CalibrationService:
         def _run():
             self.mode = 'flow_calibration'; self._set_flow_status(running=True, error=None)
             try:
-                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml)
+                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, payload.get('analysis_min_ml'), payload.get('analysis_max_ml'))
                 self.log(f"Flow calibration completed for {gas}: {result['run_id']}")
             except Exception as exc:
                 self._set_flow_status(error=str(exc))
