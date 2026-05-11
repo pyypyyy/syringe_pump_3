@@ -17,8 +17,9 @@ class TrialRunner:
 
     def move_to_volume(self, target_ml, tolerance_ml=0.5, max_steps=100000):
         axis = self.config.get('axis', {})
-        min_ml = float(axis.get('safety_min_ml', 0.0))
-        max_ml = float(axis.get('safety_max_ml', axis.get('syringe_volume_ml', 100.0)))
+        safety = self.config.get('safety', {})
+        min_ml = float(safety.get('min_volume_ml', 0.0))
+        max_ml = float(safety.get('max_volume_ml', axis.get('syringe_volume_ml', 100.0)))
         steps_per_ml = float(axis.get('microsteps_per_ml', 208.0))
         last_ml = self.position_model.voltage_to_volume_ml(self.softpot.read_voltage())
         if not (min_ml <= last_ml <= max_ml):

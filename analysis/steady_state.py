@@ -1,6 +1,7 @@
 def filter_stable_rows(rows, min_ml, max_ml):
     candidates = [
         r for r in rows
+        if ('motion_phase' not in r or r.get('motion_phase') == 'moving')
         if min_ml <= float(r['softpot_volume_ml']) <= max_ml
     ]
     flows = [float(r.get('actual_flow_lpm_window', 0.0)) for r in candidates if float(r.get('actual_flow_lpm_window', 0.0)) > 0]
@@ -45,7 +46,7 @@ def summarize_trial(rows):
     return {
         'mean_flow_voltage_v': mean_v,
         'std_flow_voltage_v': var_v ** 0.5,
-        'actual_flow_lpm': mean_a,
+        'actual_flow_lpm': compute_actual_flow_lpm(rows),
         'std_actual_flow_lpm': var_a ** 0.5,
         'sample_count': len(rows),
     }

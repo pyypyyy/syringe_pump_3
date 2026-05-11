@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import csv
 import io
 import threading
+import numbers
 
 
 class CalibrationService:
@@ -58,6 +59,25 @@ class CalibrationService:
         repeats = int(payload.get('repeats', fc.get('repeats', 3)))
         stroke_start_ml = float(payload.get('stroke_start_ml', fc.get('stroke_start_ml', 100.0)))
         stroke_end_ml = float(payload.get('stroke_end_ml', fc.get('stroke_end_ml', 0.0)))
+        analysis_min_ml = float(payload.get('analysis_min_ml', fc.get('analysis_min_ml', 10.0)))
+        analysis_max_ml = float(payload.get('analysis_max_ml', fc.get('analysis_max_ml', 90.0)))
+        safety = self.config.get('safety', {})
+        min_safe = float(safety.get('min_volume_ml', 0.0))
+        max_safe = float(safety.get('max_volume_ml', self.config.get('axis', {}).get('syringe_volume_ml', 100.0)))
+
+        if not isinstance(flows_lpm, list) or not flows_lpm:
+            return {'ok': False, 'error': 'flows_lpm must be a non-empty list of positive numbers'}
+        if any((not isinstance(v, numbers.Number)) or float(v) <= 0 for v in flows_lpm):
+            return {'ok': False, 'error': 'flows_lpm must be a non-empty list of positive numbers'}
+        if repeats < 1:
+            return {'ok': False, 'error': 'repeats must be >= 1'}
+        if not (min_safe <= stroke_start_ml <= max_safe) or not (min_safe <= stroke_end_ml <= max_safe):
+            return {'ok': False, 'error': 'stroke_start_ml and stroke_end_ml must be inside configured safety limits'}
+        if analysis_min_ml >= analysis_max_ml:
+            return {'ok': False, 'error': 'analysis_min_ml must be less than analysis_max_ml'}
+        stroke_low, stroke_high = sorted([stroke_start_ml, stroke_end_ml])
+        if not (stroke_low <= analysis_min_ml <= stroke_high and stroke_low <= analysis_max_ml <= stroke_high):
+            return {'ok': False, 'error': 'analysis range must lie between stroke_start_ml and stroke_end_ml'}
         self.flow_stop_requested = False
         self.stepper.clear_stop()
         runner = FlowCalibrationRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._set_flow_status, self._is_stop_requested)
@@ -65,7 +85,7 @@ class CalibrationService:
         def _run():
             self.mode = 'flow_calibration'; self._set_flow_status(running=True, error=None)
             try:
-                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, payload.get('analysis_min_ml'), payload.get('analysis_max_ml'))
+                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml)
                 self.log(f"Flow calibration completed for {gas}: {result['run_id']}")
             except Exception as exc:
                 self._set_flow_status(error=str(exc))

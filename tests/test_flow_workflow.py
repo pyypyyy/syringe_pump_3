@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from analysis.steady_state import filter_stable_rows, compute_actual_flow_lpm
+from analysis.steady_state import filter_stable_rows, compute_actual_flow_lpm, summarize_trial
+from calibration.trial_runner import TrialRunner
 from calibration.calibration_plan import CalibrationPlan
 from analysis.curve_fit import build_piecewise_curve
 from calibration.flow_calibration_runner import FlowCalibrationRunner
@@ -40,6 +41,44 @@ def test_stable_region_and_actual_flow():
     assert flow > 0
 
 
+def test_filter_stable_rows_excludes_settle_rows():
+    rows = [
+        {'softpot_volume_ml': 50, 'motion_phase': 'settle_before', 'actual_flow_lpm_window': 0.2},
+        {'softpot_volume_ml': 49, 'motion_phase': 'moving', 'actual_flow_lpm_window': 0.2},
+        {'softpot_volume_ml': 48, 'motion_phase': 'settle_after', 'actual_flow_lpm_window': 0.2},
+    ]
+    stable = filter_stable_rows(rows, 40, 60)
+    assert len(stable) == 1
+    assert stable[0]['motion_phase'] == 'moving'
+
+
+def test_summarize_trial_uses_endpoint_actual_flow():
+    rows = [
+        {'softpot_volume_ml': 90.0, 'elapsed_s': 0.0, 'flow_voltage_v': 1.0, 'actual_flow_lpm_window': 0.30},
+        {'softpot_volume_ml': 85.0, 'elapsed_s': 10.0, 'flow_voltage_v': 1.0, 'actual_flow_lpm_window': 0.20},
+    ]
+    summary = summarize_trial(rows)
+    assert summary['actual_flow_lpm'] == compute_actual_flow_lpm(rows)
+    assert summary['actual_flow_lpm'] != 0.25
+
+
+def test_move_to_volume_reads_safety_section_limits():
+    config = {
+        'axis': {'syringe_volume_ml': 100.0, 'microsteps_per_ml': 10.0, 'safety_min_ml': 10.0, 'safety_max_ml': 90.0},
+        'safety': {'min_volume_ml': 20.0, 'max_volume_ml': 80.0},
+    }
+    stepper = type('S', (), {'move_steps': lambda *args, **kwargs: None})()
+    softpot = type('SP', (), {'mode': 'real', 'read_voltage': lambda self: 0.0})()
+    flow = object()
+    pm = type('PM', (), {'voltage_to_volume_ml': lambda self, v: 15.0})()
+    runner = TrialRunner(config, stepper, softpot, flow, pm, lambda: False)
+    try:
+        runner.move_to_volume(30.0)
+        assert False, 'Expected safety bounds failure'
+    except RuntimeError as exc:
+        assert 'outside safety bounds' in str(exc)
+
+
 def test_curve_uses_actual_flow():
     curve = build_piecewise_curve('air', [
         {'target_flow_lpm': 0.1, 'actual_flow_lpm': 0.12, 'mean_voltage_v': 0.5, 'std_voltage_v': 0.01, 'repeat_count': 1}
@@ -70,7 +109,15 @@ def test_mock_workflow_refill_and_actual_window(tmp_path):
     assert 'actual_flow_lpm_window' in raw_text
     summary = (run_dir / 'summary.csv').read_text(encoding='utf-8')
     assert 'actual_flow_lpm' in summary
+    assert 'zero_flow_voltage_mean' in summary
     assert any(float(line.split(',')[4]) > 0 for line in summary.splitlines()[1:])
+    curve = __import__('json').loads((run_dir / 'calibration_curve.json').read_text(encoding='utf-8'))
+    assert curve['gas'] == 'air'
+    assert curve['method'] == 'piecewise_linear'
+    assert 'created_at' in curve
+    assert 'zero_flow' in curve
+    assert any(p['actual_flow_lpm'] == 0.0 for p in curve['points'])
+    assert (run_dir / 'config_snapshot.json').exists()
     assert abs(softpot.mock_volume_ml - 100.0) <= 1.0
     assert statuses.get('analysis_min_ml') == 20.0
     assert statuses.get('analysis_max_ml') == 80.0
