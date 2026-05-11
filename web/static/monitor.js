@@ -232,7 +232,34 @@ async function updateStatus() {
   renderCoverage(points);
   renderRecommendation(points);
   renderCharts(points);
+  renderAutomaticFlowStatus(data);
 }
 
 setInterval(updateStatus, 1000);
 window.addEventListener("load", updateStatus);
+
+
+async function startAutomaticFlowCalibration() {
+  const gas = document.getElementById("autoFlowGas")?.value;
+  const flows = (document.getElementById("autoFlows")?.value || "").split(",").map(x => Number(x.trim())).filter(x => Number.isFinite(x) && x > 0);
+  const repeats = Number(document.getElementById("autoRepeats")?.value || 1);
+  const strokeStartMl = Number(document.getElementById("strokeStartMl")?.value || 100);
+  const strokeEndMl = Number(document.getElementById("strokeEndMl")?.value || 0);
+  const analysisMinMl = Number(document.getElementById("analysisMinMl")?.value || 10);
+  const analysisMaxMl = Number(document.getElementById("analysisMaxMl")?.value || 90);
+  if (!flows.length) { alert("Please enter at least one valid flow rate."); return; }
+  return postJson('/api/flow/start', {gas, flows_lpm: flows, repeats, stroke_start_ml: strokeStartMl, stroke_end_ml: strokeEndMl, analysis_min_ml: analysisMinMl, analysis_max_ml: analysisMaxMl});
+}
+async function stopAutomaticFlowCalibration(){ return postJson('/api/flow/stop', {}); }
+function renderAutomaticFlowStatus(data){
+  const fc = data.flow_calibration || data.automatic_flow_calibration || data;
+  setText('flowRunning', fc.running ? 'yes':'no'); setText('flowGas', fc.gas || '--');
+  setText('flowCurrentTrial', fc.current_trial?.trial_id || fc.current_trial || '--');
+  setText('flowCurrentTarget', fc.current_trial?.target_flow_lpm ?? fc.current_target_flow_lpm ?? '--');
+  setText('flowCurrentRepeat', fc.current_trial?.repeat_index ?? '--');
+  setText('flowCompletedCount', String(fc.completed_count ?? fc.completed_trials ?? '--')); setText('flowTotalCount', String(fc.total_count ?? fc.total_trials ?? '--'));
+  setText('flowRunDir', fc.run_dir || '--'); setText('flowError', fc.error || '--');
+  if (fc.latest_sample){ setText('flowLatestVolume', fmt(fc.latest_sample.softpot_volume_ml,2,' ml')); setText('flowLatestVoltage', fmt(fc.latest_sample.flow_voltage_v,4,' V')); setText('flowLatestActualFlow', fmt(fc.latest_sample.actual_flow_lpm_window,4,' L/min')); }
+  if (fc.result?.run_dir){ setText('flowSummaryPath', `${fc.result.run_dir}/summary.csv`); setText('flowCurvePath', `${fc.result.run_dir}/calibration_curve.json`); }
+  const el=document.getElementById('flowRecentTrials'); if(el){ el.innerHTML=''; for(const t of (fc.recent_trials||[])){ const li=document.createElement('li'); li.textContent=`${t.trial_id}: target ${t.target_flow_lpm}, actual ${fmt(t.actual_flow_lpm,4,' L/min')}, V ${fmt(t.mean_voltage_v,4,' V')}`; el.appendChild(li);} }
+}
