@@ -1,5 +1,6 @@
 import time
 import logging
+import threading
 from collections import deque
 from datetime import datetime, timezone
 
@@ -60,77 +61,63 @@ class TrialRunner:
         settle_before_s = float(fc.get('settle_before_s', 1.0))
         settle_after_s = float(fc.get('settle_after_s', 0.5))
         window_s = float(fc.get('actual_flow_window_s', 0.75))
-        mock_time_scale = float(fc.get('mock_time_scale', 1.0)) if self.config.get('hardware', {}).get('mode') == 'mock' else 1.0
         stroke_ml = abs(trial.stroke_start_ml - trial.stroke_end_ml)
         target_ml_s = trial.target_flow_lpm * 1000.0 / 60.0
-        duration_s = max(0.2, stroke_ml / max(target_ml_s, 1e-9)) * mock_time_scale
+        duration_s = max(0.2, stroke_ml / max(target_ml_s, 1e-9))
         steps_per_ml = float(self.config.get('axis', {}).get('microsteps_per_ml', 208.0))
         total_steps = int(stroke_ml * steps_per_ml)
-        step_delay_s = max(0.0001, duration_s / max(total_steps, 1))
-        target_step_rate_hz = (total_steps / max(duration_s, 1e-9)) if total_steps > 0 else 0.0
-        backend_name = getattr(getattr(self.stepper, 'pulse_backend', None), 'name', 'rpi_gpio' if self.stepper.mode == 'raspberry_pi' else 'mock')
-        if target_step_rate_hz > 1000 and backend_name == 'rpi_gpio':
-            logging.getLogger(__name__).warning(
-                'Target step rate %.0f Hz is high for RPi.GPIO timing. Use pigpio backend for reliable calibration.',
-                target_step_rate_hz,
-            )
-        if hasattr(self.flow_sensor, 'set_mock_active_flow'):
-            self.flow_sensor.set_mock_active_flow(trial.target_flow_lpm)
-
         logger = CsvLogger(csv_path, [
             'timestamp_s', 'elapsed_s', 'trial_id', 'gas', 'target_flow_lpm', 'softpot_voltage_v',
             'softpot_volume_ml', 'flow_voltage_v', 'flow_lpm_live', 'actual_flow_lpm_window', 'motion_phase',
             'step_count', 'position_ml_from_steps', 'temperature_c', 'ambient_pressure_hpa', 'relative_humidity_percent'
         ])
-        rows = []
+        rows, flow_window = [], deque()
         t0 = time.time()
-        flow_window = deque()
-        status = 'completed'
-        reason = None
+        status, reason = 'completed', None
+        move_error = {'exc': None}
+
+        def _record(phase):
+            row = self._sample(trial, t0, phase, flow_window, window_s)
+            rows.append(row); logger.write(row)
+            if self.status_callback:
+                self.status_callback(latest_sample=row)
 
         try:
             self.move_to_volume(trial.stroke_start_ml, tolerance_ml=float(fc.get('position_tolerance_ml', 0.5)))
             for _ in range(max(0, int(settle_before_s / sample_interval_s))):
                 if self.stop_checker():
-                    status = 'aborted'; reason = 'User stop requested during pre-settle'; break
-                row = self._sample(trial, t0, 'settle_before', flow_window, window_s)
-                rows.append(row); logger.write(row); time.sleep(sample_interval_s)
-
+                    status, reason = 'aborted', 'User stop requested during pre-settle'; break
+                _record('settle_before'); time.sleep(sample_interval_s)
             if status == 'completed':
                 self.stepper.enable()
                 direction_toward_empty = trial.stroke_end_ml < trial.stroke_start_ml
-                moved_steps = self.stepper.move_steps_timed(total_steps, direction_toward_empty, duration_s)
-                sample_every = max(1, int(sample_interval_s / max(step_delay_s, 1e-6)))
-                for i in range(moved_steps):
+                def _motion():
+                    try:
+                        self.stepper.move_steps_timed(total_steps, direction_toward_empty, duration_s)
+                    except Exception as exc:
+                        move_error['exc'] = exc
+                motion_thread = threading.Thread(target=_motion, daemon=True)
+                motion_thread.start()
+                started = time.time()
+                while motion_thread.is_alive():
                     if self.stop_checker():
-                        status = 'aborted'; reason = 'User stop requested during stroke'; break
-                    if self.softpot.mode == 'mock':
-                        delta = -1.0 / steps_per_ml if direction_toward_empty else 1.0 / steps_per_ml
-                        self.softpot.adjust_mock_volume(delta)
-                    if i % sample_every == 0:
-                        row = self._sample(trial, t0, 'moving', flow_window, window_s)
-                        rows.append(row)
-                        logger.write(row)
-                        if self.status_callback:
-                            self.status_callback(latest_sample=row)
-
+                        status, reason = 'aborted', 'User stop requested during stroke'; self.stepper.stop(); break
+                    _record('moving')
+                    if (time.time() - started) > (duration_s * 2.5 + 1.0):
+                        status, reason = 'failed', 'stroke timeout'; self.stepper.stop(); break
+                    time.sleep(sample_interval_s)
+                motion_thread.join(timeout=1.0)
+                if move_error['exc'] is not None:
+                    raise move_error['exc']
             if status == 'completed':
                 for _ in range(max(0, int(settle_after_s / sample_interval_s))):
                     if self.stop_checker():
-                        status = 'aborted'; reason = 'User stop requested during post-settle'; break
-                    row = self._sample(trial, t0, 'settle_after', flow_window, window_s)
-                    rows.append(row); logger.write(row); time.sleep(sample_interval_s)
+                        status, reason = 'aborted', 'User stop requested during post-settle'; break
+                    _record('settle_after'); time.sleep(sample_interval_s)
         except Exception as exc:
-            status = 'failed'
-            reason = str(exc)
-            self.stepper.stop()
+            status = 'failed'; reason = str(exc); self.stepper.stop()
         finally:
             logger.close()
-            if status == 'aborted':
-                self.stepper.stop()
-            if hasattr(self.flow_sensor, 'set_mock_active_flow'):
-                self.flow_sensor.set_mock_active_flow(0.0)
-
         return {'status': status, 'reason': reason, 'raw_csv_path': str(csv_path), 'rows': rows, 'summary': None}
 
     def _sample(self, trial, t0, phase, flow_window, window_s):
@@ -143,7 +130,7 @@ class TrialRunner:
         flow_window.append((elapsed, softpot_ml))
         while len(flow_window) > 2 and (elapsed - flow_window[0][0]) > window_s:
             flow_window.popleft()
-        actual_window = 0.0
+        actual_window = None
         if len(flow_window) >= 2:
             t_old, ml_old = flow_window[0]
             dt = elapsed - t_old
