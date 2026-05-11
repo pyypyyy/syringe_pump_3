@@ -8,3 +8,7 @@ def index():
 @web_bp.route('/softpot')
 def softpot():
     return render_template('softpot.html')
+
+@web_bp.route('/flow')
+def flow():
+    return render_template('flow.html')

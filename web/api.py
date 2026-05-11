@@ -72,8 +72,8 @@ def create_api_blueprint(service):
     @api_bp.get('/flow/status')
     def flow_status():
         st = service.get_status()
-        keys = ['running','gas','current_trial','completed_trials','total_trials','current_target_flow_lpm','latest_softpot_volume_ml','latest_flow_voltage_v','run_dir']
-        return jsonify({k: st.get(k) for k in keys})
+        fc = st.get('flow_calibration', {})
+        return jsonify(fc)
 
     @api_bp.get('/flow/results')
     def flow_results():

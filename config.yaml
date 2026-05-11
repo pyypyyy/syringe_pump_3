@@ -58,3 +58,5 @@ flow_calibration:
   settle_after_s: 0.5
   fit_method: piecewise_linear
   save_raw_csv: true
+
+  mock_time_scale: 0.05

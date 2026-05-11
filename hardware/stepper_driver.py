@@ -44,16 +44,19 @@ class StepperDriver:
     def stop(self):
         self.stop_requested = True
 
-    def move_steps(self, steps, direction_toward_empty, step_delay_s=0.001):
+    def clear_stop(self):
         self.stop_requested = False
+
+    def move_steps(self, steps, direction_toward_empty, step_delay_s=0.001):
         steps = int(abs(steps))
         if steps == 0:
-            return
+            return 0
         if not self.enabled:
             self.enable()
         dir_level = 1 if direction_toward_empty else 0
         if self.invert_direction:
             dir_level = 0 if dir_level else 1
+        moved = 0
         if self._gpio:
             self._gpio.output(self.dir_pin, dir_level)
             for _ in range(steps):
@@ -63,13 +66,12 @@ class StepperDriver:
                 time.sleep(step_delay_s / 2)
                 self._gpio.output(self.step_pin, 0)
                 time.sleep(step_delay_s / 2)
+                moved += 1
         else:
-            slept = 0.0
-            total_sleep = min(0.25, steps * step_delay_s)
-            while slept < total_sleep:
+            for _ in range(steps):
                 if self.stop_requested:
                     break
-                d = min(0.005, total_sleep - slept)
-                time.sleep(d)
-                slept += d
-        self.step_position += steps if direction_toward_empty else -steps
+                time.sleep(min(0.005, step_delay_s))
+                moved += 1
+        self.step_position += moved if direction_toward_empty else -moved
+        return moved

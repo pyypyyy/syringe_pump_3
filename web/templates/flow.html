@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Automatic flow calibration</h2>
+  <div class="button-row">
+    <select id="autoFlowGas"><option value="air">air</option><option value="co2">co2</option></select>
+    <input id="autoFlows" type="text" value="0.02,0.05,0.10,0.25,0.50,0.75,1.00">
+    <input id="autoRepeats" type="number" min="1" value="3">
+  </div>
+  <div class="button-row">
+    <input id="strokeStartMl" type="number" value="100"><input id="strokeEndMl" type="number" value="0">
+    <input id="analysisMinMl" type="number" value="10"><input id="analysisMaxMl" type="number" value="90">
+  </div>
+  <div class="button-row"><button onclick="startAutomaticFlowCalibration()">Start automatic calibration</button><button class="danger" onclick="stopAutomaticFlowCalibration()">Stop calibration</button><button class="danger" onclick="postJson('/api/stop', {})">Emergency stop</button></div>
+</section>
+<section class="panel"><h3>Status</h3>
+<ul>
+<li>Running: <span id="flowRunning">--</span></li><li>Gas: <span id="flowGas">--</span></li>
+<li>Current trial ID: <span id="flowCurrentTrial">--</span></li><li>Current target flow: <span id="flowCurrentTarget">--</span></li>
+<li>Current repeat: <span id="flowCurrentRepeat">--</span></li><li>Completed / Total: <span id="flowCompletedCount">--</span> / <span id="flowTotalCount">--</span></li>
+<li>Run dir: <span id="flowRunDir">--</span></li><li>Latest volume: <span id="flowLatestVolume">--</span></li><li>Latest voltage: <span id="flowLatestVoltage">--</span></li><li>Latest actual flow: <span id="flowLatestActualFlow">--</span></li><li>Error: <span id="flowError">--</span></li>
+<li>Summary CSV: <span id="flowSummaryPath">--</span></li><li>Curve JSON: <span id="flowCurvePath">--</span></li>
+</ul></section>
+<section class="panel"><h3>Recent trial summaries</h3><ul id="flowRecentTrials"></ul></section>
+<section class="panel">
+<h2>Manual calibration point logger</h2>
+<div class="button-row"><select id="flowCalGas"><option value="air">air</option><option value="co2">co2</option></select><input id="flowCalExpected" type="number" min="0" step="0.001" placeholder="Expected L/min"><button onclick="captureFlowCalibrationPoint()">Tallenna piste</button><button onclick="resetFlowCalibrationPoints()" class="danger">Tyhjennä pisteet</button><a class="button" href="/api/flow-calibration/csv">Lataa CSV</a></div>
+<ul id="flowCalibrationList"></ul>
+</section>
+{% endblock %}

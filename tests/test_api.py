@@ -67,3 +67,28 @@ def test_flow_start_requires_softpot(client):
     data = resp.get_json()
     assert data['ok'] is False
     assert 'Softpot must be calibrated' in data['error']
+
+
+def test_flow_start_accepts_air(client):
+    client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    resp = client.post('/api/flow/start', json={'gas':'air','flows_lpm':[0.02],'repeats':1})
+    assert resp.status_code == 200
+
+
+def test_flow_start_accepts_co2(client):
+    client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    resp = client.post('/api/flow/start', json={'gas':'co2','flows_lpm':[0.02],'repeats':1})
+    assert resp.status_code == 200
+
+
+def test_flow_start_rejects_invalid_gas(client):
+    client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    resp = client.post('/api/flow/start', json={'gas':'n2'})
+    assert resp.status_code == 400
+
+
+def test_flow_stop_and_status(client):
+    resp = client.post('/api/flow/stop', json={})
+    assert resp.status_code == 200
+    st = client.get('/api/flow/status').get_json()
+    assert 'running' in st

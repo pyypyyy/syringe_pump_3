@@ -25,11 +25,11 @@ class FlowCalibrationRunner:
         run_dir = Path('output/raw') / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         trials = CalibrationPlan.build(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml)
-        trial_runner = TrialRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self.stop_checker)
+        trial_runner = TrialRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self.stop_checker, self.status_callback)
         fc = self.config.get('flow_calibration', {})
         summaries = []
         for idx, trial in enumerate(trials, start=1):
-            self.status_callback(running=True, gas=gas, current_trial=trial.trial_id, completed_trials=idx-1, total_trials=len(trials), current_target_flow_lpm=trial.target_flow_lpm, run_dir=str(run_dir))
+            self.status_callback(running=True, gas=gas, current_trial={'trial_id': trial.trial_id, 'target_flow_lpm': trial.target_flow_lpm, 'repeat_index': trial.repeat_index}, completed_trials=idx-1, total_trials=len(trials), current_target_flow_lpm=trial.target_flow_lpm, run_dir=str(run_dir))
             rows = trial_runner.run_trial(trial, run_dir / f'{trial.trial_id}.csv')
             stable = filter_stable_rows(rows, float(fc.get('analysis_min_ml', 10.0)), float(fc.get('analysis_max_ml', 90.0)))
             stats = summarize_trial(stable)
@@ -70,5 +70,5 @@ class FlowCalibrationRunner:
             w = csv.DictWriter(f, fieldnames=['target_flow_lpm', 'actual_flow_lpm', 'mean_voltage_v', 'std_voltage_v', 'repeat_count'])
             w.writeheader(); w.writerows(curve['points'])
 
-        self.status_callback(running=False, gas=gas, current_trial=None, completed_trials=len(summaries), total_trials=len(trials), current_target_flow_lpm=None, run_dir=str(run_dir), result=curve)
+        self.status_callback(running=False, gas=gas, current_trial=None, completed_trials=len(summaries), total_trials=len(trials), current_target_flow_lpm=None, run_dir=str(run_dir), result={'run_dir': str(run_dir), 'curve': curve}, recent_trials=summaries[-10:])
         return {'ok': True, 'run_id': run_id, 'trial_count': len(trials), 'run_dir': str(run_dir), 'result': curve}
