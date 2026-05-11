@@ -7,6 +7,8 @@ from motion.softpot_calibrator import SoftpotCalibrator
 from core.calibration_store import FlowCalibrationStore
 from calibration.flow_calibration_runner import FlowCalibrationRunner
 from datetime import datetime, timezone
+from pathlib import Path
+import json
 import csv
 import io
 import threading
@@ -33,7 +35,47 @@ class CalibrationService:
         points_path = storage_cfg.get('flow_points_path', 'data/flow_calibration_points.json')
         self.flow_store = FlowCalibrationStore(points_path)
         self.flow_calibration_points = self._safe_load_flow_points()
+        self.zero_flow_capture_by_gas = {}
+        self._load_latest_softpot_calibration()
 
+
+    def _read_environment(self):
+        bme = self.config.get('bme280', {})
+        if not bme.get('enabled'):
+            return {'temperature_c': None, 'ambient_pressure_hpa': None, 'relative_humidity_percent': None}
+        return {'temperature_c': None, 'ambient_pressure_hpa': None, 'relative_humidity_percent': None}
+
+    def _load_latest_softpot_calibration(self):
+        out_dir = Path('output/softpot')
+        if not out_dir.exists():
+            self.log('No valid softpot calibration loaded. Please calibrate softpot before automatic flow calibration.')
+            return
+        files = sorted(out_dir.glob('softpot_calibration_*.json'), reverse=True)
+        for fp in files:
+            try:
+                data = json.loads(fp.read_text(encoding='utf-8'))
+                pts = data.get('points', [])
+                if len(pts) < 2:
+                    continue
+                self.softpot_calibrator.points = [self._dict_to_point(p) for p in pts if 'volume_ml' in p and 'voltage_v' in p]
+                self.position_model = self.softpot_calibrator.make_position_model()
+                self.log(f'Softpot calibration loaded: {fp.name}')
+                return
+            except Exception:
+                continue
+        self.log('No valid softpot calibration loaded. Please calibrate softpot before automatic flow calibration.')
+
+    def _dict_to_point(self, point):
+        from motion.softpot_position import SoftpotPoint
+        return SoftpotPoint(float(point['volume_ml']), float(point['voltage_v']), float(point.get('std_v', 0.0)))
+
+    def capture_zero_flow(self, gas):
+        if gas not in ('air', 'co2'):
+            return {'ok': False, 'error': "gas must be 'air' or 'co2'"}
+        runner = FlowCalibrationRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._set_flow_status, self._is_stop_requested, self._read_environment)
+        cap = runner.capture_zero_flow(gas)
+        self.zero_flow_capture_by_gas[gas] = cap
+        return {'ok': True, 'zero_flow': cap}
     def _safe_load_flow_points(self):
         try: return self.flow_store.load_points()
         except Exception as e: self.log(f'Failed to load persisted flow calibration points: {e}'); return []
@@ -54,6 +96,7 @@ class CalibrationService:
         if self.flow_run_status.get('running'): return {'ok': False, 'error': 'Flow calibration already running.'}
         gas = str(payload.get('gas', self.config.get('flow_calibration', {}).get('default_gas', 'air'))).lower()
         if gas not in ('air', 'co2'): return {'ok': False, 'error': "gas must be 'air' or 'co2'"}
+        if gas not in self.zero_flow_capture_by_gas: return {'ok': False, 'error': 'Capture zero-flow before automatic calibration.'}
         fc = self.config.get('flow_calibration', {})
         flows_lpm = payload.get('flows_lpm', fc.get('flows_lpm', [0.02, 0.05]))
         repeats = int(payload.get('repeats', fc.get('repeats', 3)))
@@ -80,12 +123,12 @@ class CalibrationService:
             return {'ok': False, 'error': 'analysis range must lie between stroke_start_ml and stroke_end_ml'}
         self.flow_stop_requested = False
         self.stepper.clear_stop()
-        runner = FlowCalibrationRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._set_flow_status, self._is_stop_requested)
+        runner = FlowCalibrationRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._set_flow_status, self._is_stop_requested, self._read_environment)
 
         def _run():
             self.mode = 'flow_calibration'; self._set_flow_status(running=True, error=None)
             try:
-                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml)
+                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml, self.zero_flow_capture_by_gas.get(gas))
                 self.log(f"Flow calibration completed for {gas}: {result['run_id']}")
             except Exception as exc:
                 self._set_flow_status(error=str(exc))

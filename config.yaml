@@ -26,6 +26,7 @@ bme280:
   enabled: false
   address: 0x76
 stepper:
+  backend: "mock"
   step_pin: 18
   dir_pin: 20
   enable_pin: 16
@@ -60,3 +61,13 @@ flow_calibration:
   save_raw_csv: true
 
   mock_time_scale: 0.05
+
+  zero_flow:
+    settling_s: 2.0
+    sample_duration_s: 5.0
+    sample_interval_s: 0.05
+  quality_checks:
+    min_stable_samples: 10
+    min_stable_duration_s: 1.0
+    min_nonzero_flow_lpm: 0.001
+    max_flow_cv: 0.15

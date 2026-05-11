@@ -6,7 +6,7 @@ from logging_data.csv_logger import CsvLogger
 
 
 class TrialRunner:
-    def __init__(self, config, stepper, softpot, flow_sensor, position_model, stop_checker, status_callback=None):
+    def __init__(self, config, stepper, softpot, flow_sensor, position_model, stop_checker, status_callback=None, environment_reader=None):
         self.config = config
         self.stepper = stepper
         self.softpot = softpot
@@ -14,6 +14,7 @@ class TrialRunner:
         self.position_model = position_model
         self.stop_checker = stop_checker
         self.status_callback = status_callback
+        self.environment_reader = environment_reader
 
     def move_to_volume(self, target_ml, tolerance_ml=0.5, max_steps=100000):
         axis = self.config.get('axis', {})
@@ -51,6 +52,8 @@ class TrialRunner:
                 raise RuntimeError('failed to reach target volume in max steps')
 
     def run_trial(self, trial, csv_path):
+        if self.stop_checker():
+            return {'status': 'aborted', 'reason': 'User stop requested before trial start', 'raw_csv_path': str(csv_path), 'rows': [], 'summary': None}
         fc = self.config.get('flow_calibration', {})
         sample_interval_s = float(fc.get('sample_interval_s', 0.05))
         settle_before_s = float(fc.get('settle_before_s', 1.0))
@@ -69,41 +72,57 @@ class TrialRunner:
         logger = CsvLogger(csv_path, [
             'timestamp_s', 'elapsed_s', 'trial_id', 'gas', 'target_flow_lpm', 'softpot_voltage_v',
             'softpot_volume_ml', 'flow_voltage_v', 'flow_lpm_live', 'actual_flow_lpm_window', 'motion_phase',
-            'step_count', 'position_ml_from_steps'
+            'step_count', 'position_ml_from_steps', 'temperature_c', 'ambient_pressure_hpa', 'relative_humidity_percent'
         ])
         rows = []
         t0 = time.time()
         flow_window = deque()
+        status = 'completed'
+        reason = None
 
-        self.move_to_volume(trial.stroke_start_ml, tolerance_ml=float(fc.get('position_tolerance_ml', 0.5)))
+        try:
+            self.move_to_volume(trial.stroke_start_ml, tolerance_ml=float(fc.get('position_tolerance_ml', 0.5)))
+            for _ in range(max(0, int(settle_before_s / sample_interval_s))):
+                if self.stop_checker():
+                    status = 'aborted'; reason = 'User stop requested during pre-settle'; break
+                row = self._sample(trial, t0, 'settle_before', flow_window, window_s)
+                rows.append(row); logger.write(row); time.sleep(sample_interval_s)
 
-        for _ in range(max(0, int(settle_before_s / sample_interval_s))):
-            rows.append(self._sample(trial, t0, 'settle_before', flow_window, window_s))
-            logger.write(rows[-1]); time.sleep(sample_interval_s)
+            if status == 'completed':
+                self.stepper.enable()
+                direction_toward_empty = trial.stroke_end_ml < trial.stroke_start_ml
+                for i in range(total_steps):
+                    if self.stop_checker():
+                        status = 'aborted'; reason = 'User stop requested during stroke'; break
+                    self.stepper.move_steps(1, direction_toward_empty, step_delay_s=step_delay_s)
+                    if self.softpot.mode == 'mock':
+                        delta = -1.0 / steps_per_ml if direction_toward_empty else 1.0 / steps_per_ml
+                        self.softpot.adjust_mock_volume(delta)
+                    if i % max(1, int(sample_interval_s / max(step_delay_s, 1e-6))) == 0:
+                        row = self._sample(trial, t0, 'moving', flow_window, window_s)
+                        rows.append(row)
+                        logger.write(row)
+                        if self.status_callback:
+                            self.status_callback(latest_sample=row)
 
-        self.stepper.enable()
-        direction_toward_empty = trial.stroke_end_ml < trial.stroke_start_ml
-        for i in range(total_steps):
-            if self.stop_checker():
-                break
-            self.stepper.move_steps(1, direction_toward_empty, step_delay_s=step_delay_s)
-            if self.softpot.mode == 'mock':
-                delta = -1.0 / steps_per_ml if direction_toward_empty else 1.0 / steps_per_ml
-                self.softpot.adjust_mock_volume(delta)
-            if i % max(1, int(sample_interval_s / max(step_delay_s, 1e-6))) == 0:
-                row = self._sample(trial, t0, 'moving', flow_window, window_s)
-                rows.append(row)
-                logger.write(row)
-                if self.status_callback:
-                    self.status_callback(latest_sample=row)
+            if status == 'completed':
+                for _ in range(max(0, int(settle_after_s / sample_interval_s))):
+                    if self.stop_checker():
+                        status = 'aborted'; reason = 'User stop requested during post-settle'; break
+                    row = self._sample(trial, t0, 'settle_after', flow_window, window_s)
+                    rows.append(row); logger.write(row); time.sleep(sample_interval_s)
+        except Exception as exc:
+            status = 'failed'
+            reason = str(exc)
+            self.stepper.stop()
+        finally:
+            logger.close()
+            if status == 'aborted':
+                self.stepper.stop()
+            if hasattr(self.flow_sensor, 'set_mock_active_flow'):
+                self.flow_sensor.set_mock_active_flow(0.0)
 
-        for _ in range(max(0, int(settle_after_s / sample_interval_s))):
-            rows.append(self._sample(trial, t0, 'settle_after', flow_window, window_s))
-            logger.write(rows[-1]); time.sleep(sample_interval_s)
-        logger.close()
-        if hasattr(self.flow_sensor, 'set_mock_active_flow'):
-            self.flow_sensor.set_mock_active_flow(0.0)
-        return rows
+        return {'status': status, 'reason': reason, 'raw_csv_path': str(csv_path), 'rows': rows, 'summary': None}
 
     def _sample(self, trial, t0, phase, flow_window, window_s):
         now = time.time()
@@ -111,6 +130,7 @@ class TrialRunner:
         softpot_ml = self.position_model.voltage_to_volume_ml(softpot_v)
         flow_v = self.flow_sensor.read_voltage()
         elapsed = now - t0
+        env = self.environment_reader() if self.environment_reader else {}
         flow_window.append((elapsed, softpot_ml))
         while len(flow_window) > 2 and (elapsed - flow_window[0][0]) > window_s:
             flow_window.popleft()
@@ -121,17 +141,11 @@ class TrialRunner:
             if dt > 1e-9:
                 actual_window = abs((softpot_ml - ml_old) / dt) * 60.0 / 1000.0
         return {
-            'timestamp_s': datetime.now(timezone.utc).isoformat(),
-            'elapsed_s': elapsed,
-            'trial_id': trial.trial_id,
-            'gas': trial.gas,
-            'target_flow_lpm': trial.target_flow_lpm,
-            'softpot_voltage_v': softpot_v,
-            'softpot_volume_ml': softpot_ml,
-            'flow_voltage_v': flow_v,
-            'flow_lpm_live': self.flow_sensor.estimate_flow_lpm(flow_v),
-            'actual_flow_lpm_window': actual_window,
-            'motion_phase': phase,
-            'step_count': self.stepper.step_position,
+            'timestamp_s': datetime.now(timezone.utc).isoformat(), 'elapsed_s': elapsed,
+            'trial_id': trial.trial_id, 'gas': trial.gas, 'target_flow_lpm': trial.target_flow_lpm,
+            'softpot_voltage_v': softpot_v, 'softpot_volume_ml': softpot_ml, 'flow_voltage_v': flow_v,
+            'flow_lpm_live': self.flow_sensor.estimate_flow_lpm(flow_v), 'actual_flow_lpm_window': actual_window,
+            'motion_phase': phase, 'step_count': self.stepper.step_position,
             'position_ml_from_steps': self.stepper.step_position / float(self.config.get('axis', {}).get('microsteps_per_ml', 208.0)),
+            'temperature_c': env.get('temperature_c'), 'ambient_pressure_hpa': env.get('ambient_pressure_hpa'), 'relative_humidity_percent': env.get('relative_humidity_percent'),
         }
