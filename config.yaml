@@ -1,0 +1,46 @@
+hardware:
+  mode: "mock"   # "mock" or "raspberry_pi"
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: true
+ads1115:
+  address: 0x48
+  gain: 1
+  data_rate: 128
+softpot:
+  enabled: true
+  ads_channel: 2
+  calibration_required_on_start: true
+  calibration_points_ml: [100, 75, 50, 25, 0]
+  sample_duration_s: 1.5
+  sample_interval_s: 0.02
+  min_voltage_span_v: 0.5
+  max_point_std_v: 0.03
+flow_sensor:
+  enabled: true
+  ads_channel: 1
+  voltage_divider_ratio: 1.0
+  sample_interval_s: 0.05
+bme280:
+  enabled: false
+  address: 0x76
+stepper:
+  step_pin: 18
+  dir_pin: 20
+  enable_pin: 16
+  enable_active_low: true
+  invert_direction: false
+axis:
+  syringe_volume_ml: 100.0
+  microsteps_per_ml: 208.0
+  direction_toward_empty: 1
+jog:
+  large_ml: 10.0
+  medium_ml: 1.0
+  small_ml: 0.1
+  tiny_steps: 5
+  jog_speed_lpm: 0.20
+safety:
+  min_volume_ml: -1.0
+  max_volume_ml: 101.0

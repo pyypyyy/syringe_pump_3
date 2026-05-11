@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="grid cards">
+  <div class="card"><h3>Softpot-jännite</h3><div id="softpotVoltage" class="value">--</div></div>
+  <div class="card"><h3>Arvioitu tilavuus</h3><div id="softpotVolume" class="value">--</div></div>
+  <div class="card"><h3>Virtausanturin jännite</h3><div id="flowVoltage" class="value">--</div></div>
+  <div class="card"><h3>Arvioitu virtaus</h3><div id="flowLpm" class="value">--</div></div>
+  <div class="card"><h3>Moottori</h3><div id="motorEnabled" class="value">--</div></div>
+  <div class="card"><h3>Tila</h3><div id="mode" class="value">--</div></div>
+</section>
+
+<section class="panel">
+  <h2>Aloitus</h2>
+  <p>Aloita softpotin kalibroinnista. Mock-moodissa painikkeet simuloivat ruiskun liikettä.</p>
+  <a class="button" href="/softpot">Avaa softpot-kalibrointi</a>
+</section>
+<section class="panel"><h2>Tapahtumaloki</h2><ul id="eventLog"></ul></section>
+{% endblock %}

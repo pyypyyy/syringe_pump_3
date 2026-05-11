@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="grid cards">
+  <div class="card"><h3>Softpot-jännite</h3><div id="softpotVoltage" class="value">--</div></div>
+  <div class="card"><h3>Arvioitu tilavuus</h3><div id="softpotVolume" class="value">--</div></div>
+  <div class="card"><h3>Virtausanturin jännite</h3><div id="flowVoltage" class="value">--</div></div>
+  <div class="card"><h3>Arvioitu virtaus</h3><div id="flowLpm" class="value">--</div></div>
+  <div class="card"><h3>Moottori</h3><div id="motorEnabled" class="value">--</div></div>
+  <div class="card"><h3>Tila</h3><div id="mode" class="value">--</div></div>
+</section>
+
+<section class="layout">
+  <div class="panel">
+    <h2>Softpot-kalibrointi</h2>
+    <p>Nykyinen kohdepiste: <strong id="currentTarget">--</strong></p>
+    <div class="button-row">
+      <button onclick="postJson('/api/softpot/start', {})">Aloita kalibrointi</button>
+      <button onclick="postJson('/api/softpot/accept', {})">Hyväksy nykyinen piste</button>
+      <button onclick="postJson('/api/softpot/save', {})">Tallenna kalibrointi</button>
+    </div>
+    <h3>Pisteet</h3><ul id="pointList" class="point-list"></ul>
+  </div>
+  <div class="panel">
+    <h2>Jog-ohjaus</h2>
+    <div class="jog-grid">
+      <button onclick="jog('toward_full', 'ml', 10)">-- 10 ml täyteen</button>
+      <button onclick="jog('toward_full', 'ml', 1)">- 1 ml täyteen</button>
+      <button onclick="jog('toward_full', 'ml', 0.1)">, 0.1 ml täyteen</button>
+      <button onclick="jog('toward_full', 'steps', 5)">&lt; 5 askelta</button>
+      <button onclick="jog('toward_empty', 'steps', 5)">&gt; 5 askelta</button>
+      <button onclick="jog('toward_empty', 'ml', 0.1)">. 0.1 ml tyhjään</button>
+      <button onclick="jog('toward_empty', 'ml', 1)">+ 1 ml tyhjään</button>
+      <button onclick="jog('toward_empty', 'ml', 10)">++ 10 ml tyhjään</button>
+    </div>
+    <h3>Moottori</h3>
+    <div class="button-row">
+      <button onclick="postJson('/api/motor/enable', {})">Ota moottori käyttöön</button>
+      <button onclick="postJson('/api/motor/disable', {})">Vapauta moottori</button>
+      <button class="danger" onclick="postJson('/api/stop', {})">PYSÄYTÄ MOOTTORI</button>
+    </div>
+  </div>
+</section>
+<section class="panel"><h2>Tapahtumaloki</h2><ul id="eventLog"></ul></section>
+{% endblock %}
