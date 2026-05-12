@@ -1,4 +1,8 @@
 import time
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class StepPulseBackend:
@@ -178,21 +182,15 @@ class StepperDriver:
             return 0
         if not self.enabled:
             self.enable()
-        dir_level = 1 if direction_toward_empty else 0
-        if self.invert_direction:
-            dir_level = 0 if dir_level else 1
         moved = 0
-        if self._gpio:
-            self._gpio.output(self.dir_pin, dir_level)
-            for _ in range(steps):
-                if self.stop_requested:
-                    break
-                self._gpio.output(self.step_pin, 1)
-                time.sleep(step_delay_s / 2)
-                self._gpio.output(self.step_pin, 0)
-                time.sleep(step_delay_s / 2)
-                moved += 1
+
+        if self.pulse_backend:
+            duration_s = max(0.0001, float(step_delay_s) * steps)
+            moved = self.pulse_backend.move_steps_timed(steps, direction_toward_empty, duration_s, lambda: self.stop_requested)
+        elif self.mode == 'raspberry_pi':
+            raise RuntimeError(f"stepper backend '{self.backend_name}' unavailable in raspberry_pi mode; refusing to simulate motion")
         else:
+            logger.info('Simulating %s steps in mock mode.', steps)
             for _ in range(steps):
                 if self.stop_requested:
                     break
@@ -209,8 +207,14 @@ class StepperDriver:
             self.enable()
         if self.pulse_backend:
             moved = self.pulse_backend.move_steps_timed(steps, direction_toward_empty, duration_s, lambda: self.stop_requested)
+        elif self.mode == 'raspberry_pi':
+            raise RuntimeError(f"stepper backend '{self.backend_name}' unavailable in raspberry_pi mode; refusing to simulate motion")
         else:
             step_delay_s = max(0.0001, float(duration_s) / max(steps, 1))
-            moved = self.move_steps(steps, direction_toward_empty, step_delay_s=step_delay_s)
+            for _ in range(steps):
+                if self.stop_requested:
+                    break
+                time.sleep(min(0.005, step_delay_s))
+                moved += 1
         self.step_position += moved if direction_toward_empty else -moved
         return moved
