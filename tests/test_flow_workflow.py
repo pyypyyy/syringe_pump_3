@@ -118,3 +118,5 @@ def test_runner_outputs_summary_and_curve(tmp_path):
     curve = json.loads((rd / 'calibration_curve.json').read_text())
     assert curve['gas'] == 'air'
     assert 'zero_flow' in curve
+    assert 'rmse_lpm' not in curve['fit_quality']
+    assert curve['fit_quality']['accepted_point_count'] >= 0

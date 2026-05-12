@@ -8,6 +8,9 @@
   <div class="card"><h3>Arvioitu virtaus</h3><div id="flowLpm" class="value">--</div></div>
   <div class="card"><h3>Moottori</h3><div id="motorEnabled" class="value">--</div></div>
   <div class="card"><h3>Tila</h3><div id="mode" class="value">--</div></div>
+  <div class="card"><h3>Selected gas</h3><div id="dashSelectedGas" class="value">--</div></div>
+  <div class="card"><h3>Zero-flow captured</h3><div id="dashZeroFlow" class="value">--</div></div>
+  <div class="card"><h3>Latest auto calibration</h3><div id="dashLatestAutoCalibration" class="value">--</div></div>
 </section>
 
 <section class="panel">
@@ -16,51 +19,9 @@
   <a class="button" href="/softpot">Avaa softpot-kalibrointi</a>
 </section>
 
-<section class="panel">
-  <h2>Flow rate calibration (air / CO2)</h2>
-  <p>Syötä odotettu virtaus (L/min), valitse kaasu ja tallenna mittauspiste. Lataa CSV lopuksi.</p>
-  <div class="button-row">
-    <select id="flowCalGas">
-      <option value="air">air</option>
-      <option value="co2">co2</option>
-    </select>
-    <input id="flowCalExpected" type="number" min="0" step="0.001" placeholder="Expected L/min (e.g. 0.1)">
-    <button onclick="captureFlowCalibrationPoint()">Tallenna piste</button>
-    <button onclick="resetFlowCalibrationPoints()" class="danger">Tyhjennä pisteet</button>
-    <a class="button" href="/api/flow-calibration/csv">Lataa CSV</a>
-  </div>
+<section class="panel"><h2>Automatic flow calibration</h2><p>Authoritative calibration workflow based on softpot-derived actual flow.</p><a class="button" href="/flow">Open automatic flow calibration</a></section>
 
-  <div class="calibration-summary" id="calibrationSummaryCards"></div>
-  <p id="calibrationRecommendation" class="recommendation">Lisää pisteitä, niin saat suosituksia seuraavista mittauspisteistä.</p>
-
-  <div class="chart-grid">
-    <div class="chart-card">
-      <h3>Calibration curve (Expected vs Voltage)</h3>
-      <canvas id="curveChart"></canvas>
-    </div>
-    <div class="chart-card">
-      <h3>Residuals (Estimated - Expected)</h3>
-      <canvas id="residualChart"></canvas>
-    </div>
-    <div class="chart-card">
-      <h3>Repeatability (Expected vs Estimated)</h3>
-      <canvas id="repeatabilityChart"></canvas>
-    </div>
-    <div class="chart-card">
-      <h3>Time drift (Capture order vs Estimated)</h3>
-      <canvas id="driftChart"></canvas>
-    </div>
-  </div>
-
-  <div class="coverage-wrap">
-    <h3>Flow range coverage</h3>
-    <div class="coverage-track"><div id="coverageBar" class="coverage-bar"></div></div>
-    <p id="coverageText" class="muted">Ei pisteitä vielä.</p>
-  </div>
-
-  <h3>Captured points</h3>
-  <ul id="flowCalibrationList"></ul>
-</section>
+<section class="panel"><h2>Flow sensor diagnostics (manual voltage check)</h2><p class="muted">Diagnostic only, not authoritative calibration.</p></section>
 
 <section class="panel"><h2>Tapahtumaloki</h2><ul id="eventLog"></ul></section>
 {% endblock %}
