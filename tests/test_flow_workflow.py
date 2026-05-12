@@ -120,3 +120,50 @@ def test_runner_outputs_summary_and_curve(tmp_path):
     assert 'zero_flow' in curve
     assert 'rmse_lpm' not in curve['fit_quality']
     assert curve['fit_quality']['accepted_point_count'] >= 0
+
+
+def test_move_steps_uses_pigpio_backend(monkeypatch):
+    calls = []
+    class FakePI:
+        connected = True
+        def set_mode(self, *a): pass
+        def write(self, *a): calls.append(('write', a))
+        def hardware_PWM(self, *a): calls.append(('pwm', a))
+        def stop(self): pass
+    class FakePigpio:
+        OUTPUT = 1
+        def pi(self): return FakePI()
+    monkeypatch.setitem(__import__('sys').modules, 'pigpio', FakePigpio())
+    drv = StepperDriver({'hardware': {'mode': 'raspberry_pi'}, 'stepper': {'backend': 'pigpio', 'step_pin': 18, 'dir_pin': 2, 'enable_pin': 3}})
+    moved = drv.move_steps(20, True, step_delay_s=0.001)
+    assert moved >= 1
+    assert any(c[0] == 'pwm' for c in calls)
+
+
+def test_trial_rejects_when_softpot_stuck(tmp_path):
+    cfg = {'flow_calibration': {'sample_interval_s': 0.02, 'settle_before_s': 0.0, 'settle_after_s': 0.0, 'softpot_motion_timeout_s': 0.06, 'softpot_min_change_ml': 0.5}, 'axis': {'microsteps_per_ml': 10.0}, 'safety': {'min_volume_ml': -5.0, 'max_volume_ml': 200.0}}
+    stepper = FakeTimedStepper()
+    class StuckSoftpot:
+        mode = 'mock'
+        def read_voltage(self): return 1.0
+    runner = TrialRunner(cfg, stepper, StuckSoftpot(), FakeFlow(), FakePositionModel(), lambda: False)
+    t = type('T', (), {'stroke_start_ml': 10.0, 'stroke_end_ml': 0.0, 'target_flow_lpm': 0.5, 'trial_id': 't3', 'gas': 'air'})()
+    res = runner.run_trial(t, tmp_path / 't3.csv')
+    assert res['status'] == 'failed'
+    assert 'not changing' in (res['reason'] or '')
+
+
+def test_trial_rejects_wrong_direction(tmp_path):
+    cfg = {'flow_calibration': {'sample_interval_s': 0.02, 'settle_before_s': 0.0, 'settle_after_s': 0.0, 'softpot_direction_tolerance_ml': 0.1}, 'axis': {'microsteps_per_ml': 10.0}, 'safety': {'min_volume_ml': -5.0, 'max_volume_ml': 200.0}}
+    stepper = FakeTimedStepper()
+    class WrongDirectionSoftpot:
+        mode = 'mock'
+        def __init__(self): self.v = 1.0
+        def read_voltage(self):
+            self.v += 0.01
+            return self.v
+    runner = TrialRunner(cfg, stepper, WrongDirectionSoftpot(), FakeFlow(), FakePositionModel(), lambda: False)
+    t = type('T', (), {'stroke_start_ml': 10.0, 'stroke_end_ml': 0.0, 'target_flow_lpm': 0.5, 'trial_id': 't4', 'gas': 'air'})()
+    res = runner.run_trial(t, tmp_path / 't4.csv')
+    assert res['status'] == 'failed'
+    assert 'wrong direction' in (res['reason'] or '')

@@ -66,6 +66,10 @@ class TrialRunner:
         duration_s = max(0.2, stroke_ml / max(target_ml_s, 1e-9))
         steps_per_ml = float(self.config.get('axis', {}).get('microsteps_per_ml', 208.0))
         total_steps = int(stroke_ml * steps_per_ml)
+        softpot_motion_timeout_s = float(fc.get('softpot_motion_timeout_s', 2.0))
+        softpot_min_change_ml = float(fc.get('softpot_min_change_ml', 0.5))
+        softpot_direction_tolerance_ml = float(fc.get('softpot_direction_tolerance_ml', 0.3))
+        stroke_timeout_margin_s = float(fc.get('stroke_timeout_margin_s', 2.0))
         logger = CsvLogger(csv_path, [
             'timestamp_s', 'elapsed_s', 'trial_id', 'gas', 'target_flow_lpm', 'softpot_voltage_v',
             'softpot_volume_ml', 'flow_voltage_v', 'flow_lpm_live', 'actual_flow_lpm_window', 'motion_phase',
@@ -99,12 +103,35 @@ class TrialRunner:
                 motion_thread = threading.Thread(target=_motion, daemon=True)
                 motion_thread.start()
                 started = time.time()
+                expected_sign = -1 if direction_toward_empty else 1
+                last_softpot_ml = None
+                motion_change_start = started
                 while motion_thread.is_alive():
                     if self.stop_checker():
                         status, reason = 'aborted', 'User stop requested during stroke'; self.stepper.stop(); break
-                    _record('moving')
-                    if (time.time() - started) > (duration_s * 2.5 + 1.0):
+                    row = self._sample(trial, t0, 'moving', flow_window, window_s)
+                    rows.append(row); logger.write(row)
+                    if self.status_callback:
+                        self.status_callback(latest_sample=row)
+                    softpot_ml = row['softpot_volume_ml']
+                    if last_softpot_ml is not None:
+                        delta = softpot_ml - last_softpot_ml
+                        if delta * expected_sign < -softpot_direction_tolerance_ml:
+                            status, reason = 'failed', f'softpot moved in wrong direction (delta={delta:.3f} ml)'; self.stepper.stop(); break
+                        if abs(delta) >= softpot_min_change_ml:
+                            motion_change_start = time.time()
+                    if min(trial.stroke_start_ml, trial.stroke_end_ml) <= softpot_ml <= max(trial.stroke_start_ml, trial.stroke_end_ml):
+                        if (direction_toward_empty and softpot_ml <= trial.stroke_end_ml) or ((not direction_toward_empty) and softpot_ml >= trial.stroke_end_ml):
+                            status, reason = 'completed', 'stroke target reached from softpot'; self.stepper.stop(); break
+                    safety = self.config.get('safety', {})
+                    safe_min = float(safety.get('min_volume_ml', 0.0)); safe_max = float(safety.get('max_volume_ml', self.config.get('axis', {}).get('syringe_volume_ml', 100.0)))
+                    if softpot_ml < safe_min or softpot_ml > safe_max:
+                        status, reason = 'failed', f'softpot outside safety bounds: {softpot_ml:.3f} ml'; self.stepper.stop(); break
+                    if (time.time() - motion_change_start) > softpot_motion_timeout_s:
+                        status, reason = 'failed', 'softpot not changing while motor commanded'; self.stepper.stop(); break
+                    if (time.time() - started) > (duration_s + stroke_timeout_margin_s):
                         status, reason = 'failed', 'stroke timeout'; self.stepper.stop(); break
+                    last_softpot_ml = softpot_ml
                     time.sleep(sample_interval_s)
                 motion_thread.join(timeout=1.0)
                 if move_error['exc'] is not None:

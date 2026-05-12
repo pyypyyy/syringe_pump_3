@@ -35,7 +35,6 @@ stepper:
 axis:
   syringe_volume_ml: 100.0
   microsteps_per_ml: 208.0
-  direction_toward_empty: 1
 jog:
   large_ml: 10.0
   medium_ml: 1.0
@@ -61,6 +60,11 @@ flow_calibration:
   save_raw_csv: true
 
   mock_time_scale: 0.05
+
+  softpot_motion_timeout_s: 2.0
+  softpot_min_change_ml: 0.5
+  softpot_direction_tolerance_ml: 0.3
+  stroke_timeout_margin_s: 2.0
 
   zero_flow:
     settling_s: 2.0
