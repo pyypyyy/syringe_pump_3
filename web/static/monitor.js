@@ -253,7 +253,10 @@ async function startAutomaticFlowCalibration() {
 async function stopAutomaticFlowCalibration(){ return postJson('/api/flow/stop', {}); }
 function renderAutomaticFlowStatus(data){
   const fc = data.flow_calibration || data.automatic_flow_calibration || data;
+  const gas = fc.gas || '--';
+  const zeroCap = gas !== '--' ? (data.zero_flow_capture_by_gas?.[gas] || null) : null;
   setText('flowRunning', fc.running ? 'yes':'no'); setText('flowGas', fc.gas || '--');
+  setText('flowZeroStatus', zeroCap ? `yes (${fmt(zeroCap.voltage_v,4,' V')})` : 'no');
   setText('flowCurrentTrial', fc.current_trial?.trial_id || fc.current_trial || '--');
   setText('flowCurrentTarget', fc.current_trial?.target_flow_lpm ?? fc.current_target_flow_lpm ?? '--');
   setText('flowCurrentRepeat', fc.current_trial?.repeat_index ?? '--');
@@ -261,7 +264,40 @@ function renderAutomaticFlowStatus(data){
   setText('flowRunDir', fc.run_dir || '--'); setText('flowError', fc.error || '--');
   if (fc.latest_sample){ setText('flowLatestVolume', fmt(fc.latest_sample.softpot_volume_ml,2,' ml')); setText('flowLatestVoltage', fmt(fc.latest_sample.flow_voltage_v,4,' V')); setText('flowLatestActualFlow', fmt(fc.latest_sample.actual_flow_lpm_window,4,' L/min')); }
   if (fc.result?.run_dir){ setText('flowSummaryPath', `${fc.result.run_dir}/summary.csv`); setText('flowCurvePath', `${fc.result.run_dir}/calibration_curve.json`); }
+  const trials = fc.result?.trial_statuses || [];
+  const accepted = trials.filter(t => t.status === 'accepted');
+  const rejected = trials.filter(t => t.status !== 'accepted');
+  setText('flowAcceptedCount', String(accepted.length));
+  setText('flowRejectedCount', String(rejected.length));
+
+  const acceptedEl = document.getElementById('flowAcceptedPoints');
+  if (acceptedEl) {
+    acceptedEl.innerHTML = '';
+    for (const p of (fc.result?.result?.model?.points || [])) {
+      const li = document.createElement('li');
+      li.textContent = `target ${fmt(p.target_flow_lpm,4,' L/min')} | actual ${fmt(p.mean_actual_flow_lpm,4,' L/min')} | V ${fmt(p.mean_voltage_v,4,' V')} | n=${p.trial_count ?? '--'}`;
+      acceptedEl.appendChild(li);
+    }
+  }
+
+  const rejectedEl = document.getElementById('flowRejectedTrials');
+  if (rejectedEl) {
+    rejectedEl.innerHTML = '';
+    for (const t of rejected) {
+      const li = document.createElement('li');
+      li.textContent = `${t.trial_id}: target ${fmt(t.target_flow_lpm,4,' L/min')} | reason: ${t.reason || 'unknown'}`;
+      rejectedEl.appendChild(li);
+    }
+  }
+
+  const points = fc.result?.result?.model?.points || [];
+  ensureChart('autoCurveChart', {type:'scatter', data:{datasets:[{label:`${gas.toUpperCase()} actual flow`, data:points.map(p=>({x:Number(p.mean_voltage_v),y:Number(p.mean_actual_flow_lpm)})), backgroundColor: gas==='co2' ? '#dc2626' : '#2563eb'}]}, options:{parsing:false, scales:{x:{title:{display:true,text:'Mean flow sensor voltage (V)'}}, y:{title:{display:true,text:'Softpot-derived actual flow (L/min)'}}}}});
+  ensureChart('targetActualChart', {type:'scatter', data:{datasets:[{label:`${gas.toUpperCase()} target vs actual`, data:points.map(p=>({x:Number(p.target_flow_lpm),y:Number(p.mean_actual_flow_lpm)})), backgroundColor:'#0f766e'}]}, options:{parsing:false, scales:{x:{title:{display:true,text:'Target flow (L/min)'}}, y:{title:{display:true,text:'Actual flow (L/min)'}}}}});
   const el=document.getElementById('flowRecentTrials'); if(el){ el.innerHTML=''; for(const t of (fc.recent_trials||[])){ const li=document.createElement('li'); li.textContent=`${t.trial_id}: target ${t.target_flow_lpm}, actual ${fmt(t.actual_flow_lpm,4,' L/min')}, V ${fmt(t.mean_voltage_v,4,' V')}`; el.appendChild(li);} }
+
+  setText('dashSelectedGas', gas);
+  setText('dashZeroFlow', zeroCap ? 'yes' : 'no');
+  setText('dashLatestAutoCalibration', fc.result?.run_id || '--');
 }
 
 async function captureZeroFlow(){ const gas=document.getElementById('autoFlowGas')?.value||'air'; return postJson('/api/flow/zero-capture',{gas}); }

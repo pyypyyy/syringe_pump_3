@@ -16,14 +16,20 @@
 <section class="panel"><h3>Status</h3>
 <ul>
 <li>Running: <span id="flowRunning">--</span></li><li>Gas: <span id="flowGas">--</span></li>
+<li>Zero-flow captured: <span id="flowZeroStatus">--</span></li>
 <li>Current trial ID: <span id="flowCurrentTrial">--</span></li><li>Current target flow: <span id="flowCurrentTarget">--</span></li>
 <li>Current repeat: <span id="flowCurrentRepeat">--</span></li><li>Completed / Total: <span id="flowCompletedCount">--</span> / <span id="flowTotalCount">--</span></li>
+<li>Accepted trials: <span id="flowAcceptedCount">--</span></li><li>Rejected trials: <span id="flowRejectedCount">--</span></li>
 <li>Run dir: <span id="flowRunDir">--</span></li><li>Latest volume: <span id="flowLatestVolume">--</span></li><li>Latest voltage: <span id="flowLatestVoltage">--</span></li><li>Latest actual flow: <span id="flowLatestActualFlow">--</span></li><li>Error: <span id="flowError">--</span></li>
 <li>Summary CSV: <span id="flowSummaryPath">--</span></li><li>Curve JSON: <span id="flowCurvePath">--</span></li>
 </ul></section>
+<section class="panel"><h3>Automatic calibration points (actual flow vs voltage)</h3><canvas id="autoCurveChart"></canvas><ul id="flowAcceptedPoints"></ul></section>
+<section class="panel"><h3>Target flow vs actual flow</h3><canvas id="targetActualChart"></canvas></section>
+<section class="panel"><h3>Rejected trials</h3><ul id="flowRejectedTrials"></ul></section>
 <section class="panel"><h3>Recent trial summaries</h3><ul id="flowRecentTrials"></ul></section>
 <section class="panel">
-<h2>Manual voltage check</h2>
+<h2>Flow sensor diagnostics (manual voltage check)</h2>
+<p class="muted">Diagnostic only. This is not the authoritative calibration workflow.</p>
 <div class="button-row"><select id="flowCalGas"><option value="air">air</option><option value="co2">co2</option></select><input id="flowCalExpected" type="number" min="0" step="0.001" placeholder="Expected L/min"><button onclick="captureFlowCalibrationPoint()">Save manual point</button><button onclick="resetFlowCalibrationPoints()" class="danger">Tyhjennä pisteet</button><a class="button" href="/api/flow-calibration/csv">Lataa CSV</a></div>
 <ul id="flowCalibrationList"></ul>
 </section>
