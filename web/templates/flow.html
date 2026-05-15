@@ -11,11 +11,14 @@
     <input id="strokeStartMl" type="number" value="100"><input id="strokeEndMl" type="number" value="0">
     <input id="analysisMinMl" type="number" value="10"><input id="analysisMaxMl" type="number" value="90">
   </div>
-  <div class="button-row"><button onclick="captureZeroFlow()">Capture zero</button><button onclick="startAutomaticFlowCalibration()">Start automatic calibration</button><button class="danger" onclick="stopAutomaticFlowCalibration()">Stop calibration</button><button class="danger" onclick="postJson('/api/stop', {})">Emergency stop</button></div>
+  <div class="button-row"><button onclick="captureZeroFlow()">Capture zero</button><button onclick="runFlowPreflight()">Run preflight</button><button id="startAutoCalibrationBtn" onclick="startAutomaticFlowCalibration()">Start automatic calibration</button><button class="danger" onclick="stopAutomaticFlowCalibration()">Stop calibration</button><button class="danger" onclick="postJson('/api/stop', {})">Emergency stop</button></div>
 </section>
 <section class="panel"><h3>Status</h3>
 <ul>
 <li>Running: <span id="flowRunning">--</span></li><li>Gas: <span id="flowGas">--</span></li>
+<li>Softpot detected: <span id="preflightSoftpotDetected">--</span></li><li>Small motion detected: <span id="preflightSmallMotion">--</span></li>
+<li>Direction verified: <span id="preflightDirectionVerified">--</span></li><li>Calibration start enabled: <span id="preflightStartEnabled">--</span></li>
+<li>Preflight reason: <span id="preflightReason">--</span></li>
 <li>Zero-flow captured: <span id="flowZeroStatus">--</span></li>
 <li>Current trial ID: <span id="flowCurrentTrial">--</span></li><li>Current target flow: <span id="flowCurrentTarget">--</span></li>
 <li>Current repeat: <span id="flowCurrentRepeat">--</span></li><li>Completed / Total: <span id="flowCompletedCount">--</span> / <span id="flowTotalCount">--</span></li>

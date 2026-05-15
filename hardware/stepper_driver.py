@@ -200,21 +200,37 @@ class StepperDriver:
         return moved
 
     def move_steps_timed(self, steps, direction_toward_empty, duration_s):
-        steps = int(abs(steps))
-        if steps == 0:
-            return 0
+        try:
+            requested_steps = int(abs(int(steps)))
+        except (TypeError, ValueError):
+            requested_steps = 0
+        try:
+            duration_s = float(duration_s)
+        except (TypeError, ValueError):
+            duration_s = 0.0
+        if requested_steps <= 0 or duration_s <= 0:
+            return {'requested_steps': requested_steps, 'moved_steps': 0, 'completed': requested_steps == 0, 'stopped': False, 'duration_s': 0.0}
         if not self.enabled:
             self.enable()
+        moved = 0
+        started_at = time.time()
         if self.pulse_backend:
-            moved = self.pulse_backend.move_steps_timed(steps, direction_toward_empty, duration_s, lambda: self.stop_requested)
+            moved = self.pulse_backend.move_steps_timed(requested_steps, direction_toward_empty, duration_s, lambda: self.stop_requested)
         elif self.mode == 'raspberry_pi':
             raise RuntimeError(f"stepper backend '{self.backend_name}' unavailable in raspberry_pi mode; refusing to simulate motion")
         else:
-            step_delay_s = max(0.0001, float(duration_s) / max(steps, 1))
-            for _ in range(steps):
+            step_delay_s = max(0.0001, duration_s / max(requested_steps, 1))
+            for _ in range(requested_steps):
                 if self.stop_requested:
                     break
                 time.sleep(min(0.005, step_delay_s))
                 moved += 1
+        elapsed = max(0.0, time.time() - started_at)
         self.step_position += moved if direction_toward_empty else -moved
-        return moved
+        return {
+            'requested_steps': requested_steps,
+            'moved_steps': int(moved),
+            'completed': int(moved) >= requested_steps,
+            'stopped': bool(self.stop_requested and int(moved) < requested_steps),
+            'duration_s': elapsed,
+        }

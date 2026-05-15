@@ -72,6 +72,7 @@ def test_flow_start_requires_softpot(client):
 def test_flow_start_accepts_air(client):
     client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
     client.post('/api/flow/zero-capture', json={'gas':'air'})
+    client.application.config['SERVICE'].motion_direction_verified = True
     resp = client.post('/api/flow/start', json={'gas':'air','flows_lpm':[0.02],'repeats':1})
     assert resp.status_code == 200
 
@@ -79,8 +80,17 @@ def test_flow_start_accepts_air(client):
 def test_flow_start_accepts_co2(client):
     client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
     client.post('/api/flow/zero-capture', json={'gas':'co2'})
+    client.application.config['SERVICE'].motion_direction_verified = True
     resp = client.post('/api/flow/start', json={'gas':'co2','flows_lpm':[0.02],'repeats':1})
     assert resp.status_code == 200
+
+
+def test_flow_start_requires_preflight(client):
+    client.application.config['SERVICE'].position_model = type('M', (), {'voltage_to_volume_ml': lambda self, v: 50.0})()
+    client.post('/api/flow/zero-capture', json={'gas':'air'})
+    resp = client.post('/api/flow/start', json={'gas': 'air', 'flows_lpm': [0.02], 'repeats': 1})
+    assert resp.status_code == 400
+    assert 'Preflight required' in resp.get_json()['error']
 
 
 def test_flow_start_rejects_invalid_gas(client):
@@ -117,6 +127,7 @@ def test_flow_failed_motion_sets_error_and_not_running(client, monkeypatch):
         raise RuntimeError('motion failed')
     monkeypatch.setattr(FlowCalibrationRunner, 'run', boom)
     client.post('/api/flow/zero-capture', json={'gas':'air'})
+    svc.motion_direction_verified = True
     resp = client.post('/api/flow/start', json={'gas':'air','flows_lpm':[0.02],'repeats':1})
     assert resp.status_code == 200
     import time

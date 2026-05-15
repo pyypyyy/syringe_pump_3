@@ -251,11 +251,20 @@ async function startAutomaticFlowCalibration() {
   return postJson('/api/flow/start', {gas, flows_lpm: flows, repeats, stroke_start_ml: strokeStartMl, stroke_end_ml: strokeEndMl, analysis_min_ml: analysisMinMl, analysis_max_ml: analysisMaxMl});
 }
 async function stopAutomaticFlowCalibration(){ return postJson('/api/flow/stop', {}); }
+async function runFlowPreflight(){ return postJson('/api/flow/preflight', {}); }
 function renderAutomaticFlowStatus(data){
   const fc = data.flow_calibration || data.automatic_flow_calibration || data;
   const gas = fc.gas || '--';
   const zeroCap = gas !== '--' ? (data.zero_flow_capture_by_gas?.[gas] || null) : null;
   setText('flowRunning', fc.running ? 'yes':'no'); setText('flowGas', fc.gas || '--');
+  const pre = data.preflight || {};
+  setText('preflightSoftpotDetected', pre.softpot_detected ? 'yes' : 'no');
+  setText('preflightSmallMotion', pre.small_motion_detected ? 'yes' : 'no');
+  setText('preflightDirectionVerified', pre.direction_verified ? 'yes' : 'no');
+  setText('preflightStartEnabled', data.motion_direction_verified ? 'yes' : 'no');
+  setText('preflightReason', pre.reason || '--');
+  const startBtn = document.getElementById('startAutoCalibrationBtn');
+  if (startBtn) startBtn.disabled = !data.motion_direction_verified;
   setText('flowZeroStatus', zeroCap ? `yes (${fmt(zeroCap.voltage_v,4,' V')})` : 'no');
   setText('flowCurrentTrial', fc.current_trial?.trial_id || fc.current_trial || '--');
   setText('flowCurrentTarget', fc.current_trial?.target_flow_lpm ?? fc.current_target_flow_lpm ?? '--');

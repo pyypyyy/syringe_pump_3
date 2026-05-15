@@ -36,6 +36,8 @@ class CalibrationService:
         self.flow_store = FlowCalibrationStore(points_path)
         self.flow_calibration_points = self._safe_load_flow_points()
         self.zero_flow_capture_by_gas = {}
+        self.motion_direction_verified = False
+        self.preflight_status = {'ran': False, 'passed': False, 'reason': 'Not yet run', 'softpot_detected': False, 'small_motion_detected': False, 'direction_verified': False}
         self._load_latest_softpot_calibration()
 
 
@@ -89,7 +91,7 @@ class CalibrationService:
     def get_status(self):
         softpot_voltage = self.softpot.read_voltage(); softpot_volume = self.position_model.voltage_to_volume_ml(softpot_voltage) if self.position_model else None
         flow_voltage = self.flow_sensor.read_voltage()
-        return {'mode': self.mode,'softpot_voltage_v': softpot_voltage,'softpot_volume_ml': softpot_volume,'flow_voltage_v': flow_voltage,'flow_lpm': self.flow_sensor.estimate_flow_lpm(flow_voltage),'motor_enabled': self.stepper.enabled,'step_position': self.stepper.step_position,'step_position_valid': self.stepper.step_position_valid,'current_target_ml': self.softpot_calibrator.current_target,'calibration_points': [p.__dict__ for p in self.softpot_calibrator.points],'calibration_targets': self.softpot_calibrator.targets,'last_event': self.last_event,'events': list(reversed(self.events)),'flow_calibration_points': list(reversed(self.flow_calibration_points)),'flow_calibration': self.flow_run_status,'zero_flow_capture_by_gas': self.zero_flow_capture_by_gas,**self.flow_run_status}
+        return {'mode': self.mode,'softpot_voltage_v': softpot_voltage,'softpot_volume_ml': softpot_volume,'flow_voltage_v': flow_voltage,'flow_lpm': self.flow_sensor.estimate_flow_lpm(flow_voltage),'motor_enabled': self.stepper.enabled,'step_position': self.stepper.step_position,'step_position_valid': self.stepper.step_position_valid,'current_target_ml': self.softpot_calibrator.current_target,'calibration_points': [p.__dict__ for p in self.softpot_calibrator.points],'calibration_targets': self.softpot_calibrator.targets,'last_event': self.last_event,'events': list(reversed(self.events)),'flow_calibration_points': list(reversed(self.flow_calibration_points)),'flow_calibration': self.flow_run_status,'zero_flow_capture_by_gas': self.zero_flow_capture_by_gas,'motion_direction_verified': self.motion_direction_verified,'preflight': self.preflight_status,**self.flow_run_status}
 
     def start_flow_calibration(self, payload):
         if self.position_model is None: return {'ok': False, 'error': 'Softpot must be calibrated before flow calibration.'}
@@ -97,6 +99,7 @@ class CalibrationService:
         gas = str(payload.get('gas', self.config.get('flow_calibration', {}).get('default_gas', 'air'))).lower()
         if gas not in ('air', 'co2'): return {'ok': False, 'error': "gas must be 'air' or 'co2'"}
         if gas not in self.zero_flow_capture_by_gas: return {'ok': False, 'error': 'Capture zero-flow before automatic calibration.'}
+        if not self.motion_direction_verified: return {'ok': False, 'error': f"Preflight required before automatic calibration: {self.preflight_status.get('reason', 'not verified')}"}
         fc = self.config.get('flow_calibration', {})
         flows_lpm = payload.get('flows_lpm', fc.get('flows_lpm', [0.02, 0.05]))
         repeats = int(payload.get('repeats', fc.get('repeats', 3)))
@@ -149,6 +152,36 @@ class CalibrationService:
         return {'ok': True, 'run_id': 'starting', 'trial_count': len(flows_lpm) * repeats}
 
     def stop_flow_calibration(self): self.flow_stop_requested = True; self.stepper.stop(); return {'ok': True}
+    def run_flow_preflight(self, payload=None):
+        payload = payload or {}
+        if self.position_model is None:
+            self.motion_direction_verified = False
+            self.preflight_status = {'ran': True, 'passed': False, 'reason': 'Softpot is not calibrated', 'softpot_detected': False, 'small_motion_detected': False, 'direction_verified': False}
+            return {'ok': False, 'error': self.preflight_status['reason'], 'preflight': self.preflight_status}
+        fc = self.config.get('flow_calibration', {})
+        safety = self.config.get('safety', {})
+        safe_min = float(safety.get('min_volume_ml', 0.0))
+        safe_max = float(safety.get('max_volume_ml', self.config.get('axis', {}).get('syringe_volume_ml', 100.0)))
+        initial_ml = self.position_model.voltage_to_volume_ml(self.softpot.read_voltage())
+        if not (safe_min <= initial_ml <= safe_max):
+            reason = f'out-of-range softpot value before move ({initial_ml:.3f} ml)'
+            self.motion_direction_verified = False
+            self.preflight_status = {'ran': True, 'passed': False, 'reason': reason, 'softpot_detected': True, 'small_motion_detected': False, 'direction_verified': False}
+            return {'ok': False, 'error': reason, 'preflight': self.preflight_status}
+        test_ml = max(0.1, float(payload.get('test_ml', fc.get('preflight_test_ml', 2.0))))
+        duration_s = max(0.1, float(payload.get('duration_s', fc.get('preflight_duration_s', 1.5))))
+        steps_per_ml = float(self.config.get('axis', {}).get('microsteps_per_ml', 208.0))
+        result = self.stepper.move_steps_timed(max(1, int(test_ml * steps_per_ml)), True, duration_s)
+        final_ml = self.position_model.voltage_to_volume_ml(self.softpot.read_voltage())
+        delta = final_ml - initial_ml
+        small_motion_ok = abs(delta) >= float(fc.get('preflight_min_change_ml', 0.2))
+        direction_ok = delta < 0
+        in_range = safe_min <= final_ml <= safe_max
+        passed = small_motion_ok and direction_ok and in_range
+        reason = 'ok' if passed else ('no softpot movement detected' if not small_motion_ok else (f'wrong direction detected (delta={delta:.3f} ml)' if not direction_ok else f'out-of-range softpot value after move ({final_ml:.3f} ml)'))
+        self.motion_direction_verified = passed
+        self.preflight_status = {'ran': True, 'passed': passed, 'reason': reason, 'softpot_detected': True, 'small_motion_detected': small_motion_ok, 'direction_verified': direction_ok, 'initial_volume_ml': initial_ml, 'final_volume_ml': final_ml, 'delta_ml': delta, 'move_result': result}
+        return {'ok': passed, 'error': None if passed else reason, 'preflight': self.preflight_status}
     def flow_results(self): return {'ok': True, 'result': self.flow_run_status.get('result')}
     def add_flow_calibration_point(self, gas, expected_flow_lpm):
         gas_name = str(gas or '').strip().lower()

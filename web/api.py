@@ -79,6 +79,14 @@ def create_api_blueprint(service):
     def flow_stop():
         return jsonify(service.stop_flow_calibration())
 
+    @api_bp.post('/flow/preflight')
+    def flow_preflight():
+        data, err = parse_json()
+        if err:
+            return err
+        res = service.run_flow_preflight(data)
+        return jsonify(res), (200 if res.get('ok') else 400)
+
     @api_bp.get('/flow/status')
     def flow_status():
         st = service.get_status()
