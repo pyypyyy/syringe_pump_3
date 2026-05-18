@@ -167,3 +167,22 @@ def test_trial_rejects_wrong_direction(tmp_path):
     res = runner.run_trial(t, tmp_path / 't4.csv')
     assert res['status'] == 'failed'
     assert 'wrong direction' in (res['reason'] or '')
+
+
+def test_exercise_auto_direction_uses_auto_path(tmp_path):
+    from hardware.softpot_reader import SoftpotReader
+    cfg = {'hardware': {'mode': 'mock'}, 'axis': {'microsteps_per_ml': 10.0, 'syringe_volume_ml': 100.0}, 'flow_calibration': {'position_tolerance_ml': 0.1}, 'safety': {'min_volume_ml': -1.0, 'max_volume_ml': 101.0}}
+    stepper = StepperDriver(cfg)
+    softpot = SoftpotReader(cfg)
+
+    class PM:
+        def __init__(self, s):
+            self.s = s
+        def voltage_to_volume_ml(self, voltage):
+            return (voltage - self.s.mock_min_v) / (self.s.mock_max_v - self.s.mock_min_v) * 100.0
+
+    runner = TrialRunner(cfg, stepper, softpot, FakeFlow(), PM(softpot), lambda: False)
+    out = runner.exercise_auto_direction(step_ml=0.5)
+    assert out['ok'] is True
+    assert out['delta_toward_empty_ml'] < 0
+    assert out['delta_toward_full_ml'] > 0
