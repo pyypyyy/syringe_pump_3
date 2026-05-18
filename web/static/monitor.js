@@ -1,15 +1,42 @@
 let charts = {};
 
 async function postJson(url, data) {
+  console.debug("POST", url, data || {});
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data || {}),
   });
   const json = await response.json();
+  if (!response.ok) {
+    const msg = json && json.error ? json.error : `Request failed: ${response.status}`;
+    alert(msg);
+  }
   if (!json.ok && json.error) alert(json.error);
   await updateStatus();
   return json;
+}
+
+async function jog(direction, amountType, amount) {
+  const payload = {
+    direction: direction,
+    amount_type: amountType,
+    amount: amount,
+  };
+  console.info("Jog button clicked", payload);
+  try {
+    const result = await postJson('/api/jog', payload);
+    if (!result.ok) {
+      console.warn('Jog failed', result);
+    } else {
+      console.info('Jog succeeded', result);
+    }
+    return result;
+  } catch (err) {
+    console.error('Jog request failed', err);
+    alert(`Jog request failed: ${err}`);
+    throw err;
+  }
 }
 
 async function captureFlowCalibrationPoint() {

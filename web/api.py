@@ -1,4 +1,8 @@
 from flask import Blueprint, jsonify, request, Response
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_api_blueprint(service):
@@ -33,6 +37,7 @@ def create_api_blueprint(service):
         data, err = parse_json()
         if err:
             return err
+        logger.info('Jog request payload: %s', data)
         direction = data.get('direction')
         amount_type = data.get('amount_type')
         amount = data.get('amount')
@@ -42,7 +47,9 @@ def create_api_blueprint(service):
             return error("amount_type must be 'ml' or 'steps'")
         if amount is None:
             return error('amount is required')
-        return jsonify(service.jog(direction, amount_type, amount))
+        result = service.jog(direction, amount_type, amount)
+        logger.info('Jog command result: direction=%s amount_type=%s amount=%s result=%s', direction, amount_type, amount, result)
+        return jsonify(result)
 
     @api_bp.post('/motor/enable')
     def motor_enable():
