@@ -13,31 +13,32 @@
 <section class="layout">
   <div class="panel">
     <h2>Softpot-kalibrointi</h2>
-    <p>Nykyinen kohdepiste: <strong id="currentTarget">--</strong></p>
+    <p>Nykyinen kohdepiste: <strong id="softpotCurrentTarget">--</strong></p>
     <div class="button-row">
-      <button onclick="postJson('/api/softpot/start', {})">Aloita kalibrointi</button>
-      <button onclick="postJson('/api/softpot/accept', {})">Hyväksy nykyinen piste</button>
-      <button onclick="postJson('/api/softpot/save', {})">Tallenna kalibrointi</button>
+      <button id="btnSoftpotStart">Aloita kalibrointi</button>
+      <button id="btnSoftpotAccept">Hyväksy nykyinen piste</button>
+      <button id="btnSoftpotSave">Tallenna kalibrointi</button>
     </div>
-    <h3>Pisteet</h3><ul id="pointList" class="point-list"></ul>
+    <h3>Hyväksytyt pisteet</h3><ul id="softpotAcceptedPoints" class="point-list"></ul>
+    <h3>Jäljellä olevat kohdepisteet</h3><ul id="softpotRemainingTargets" class="point-list"></ul>
   </div>
   <div class="panel">
     <h2>Jog-ohjaus</h2>
     <div class="jog-grid">
-      <button onclick="jog('toward_full', 'ml', 10)">Move 10 ml toward full</button>
-      <button onclick="jog('toward_full', 'ml', 1)">Move 1 ml toward full</button>
-      <button onclick="jog('toward_full', 'ml', 0.1)">Move 0.1 ml toward full</button>
-      <button onclick="jog('toward_full', 'steps', 5)">&lt; 5 askelta</button>
-      <button onclick="jog('toward_empty', 'steps', 5)">&gt; 5 askelta</button>
-      <button onclick="jog('toward_empty', 'ml', 0.1)">Move 0.1 ml toward empty</button>
-      <button onclick="jog('toward_empty', 'ml', 1)">Move 1 ml toward empty</button>
-      <button onclick="jog('toward_empty', 'ml', 10)">Move 10 ml toward empty</button>
+      <button data-jog-direction="toward_full" data-jog-amount-type="ml" data-jog-amount="10">Move 10 ml toward full</button>
+      <button data-jog-direction="toward_full" data-jog-amount-type="ml" data-jog-amount="1">Move 1 ml toward full</button>
+      <button data-jog-direction="toward_full" data-jog-amount-type="ml" data-jog-amount="0.1">Move 0.1 ml toward full</button>
+      <button data-jog-direction="toward_full" data-jog-amount-type="steps" data-jog-amount="5">&lt; 5 askelta</button>
+      <button data-jog-direction="toward_empty" data-jog-amount-type="steps" data-jog-amount="5">&gt; 5 askelta</button>
+      <button data-jog-direction="toward_empty" data-jog-amount-type="ml" data-jog-amount="0.1">Move 0.1 ml toward empty</button>
+      <button data-jog-direction="toward_empty" data-jog-amount-type="ml" data-jog-amount="1">Move 1 ml toward empty</button>
+      <button data-jog-direction="toward_empty" data-jog-amount-type="ml" data-jog-amount="10">Move 10 ml toward empty</button>
     </div>
     <h3>Moottori</h3>
     <div class="button-row">
-      <button onclick="postJson('/api/motor/enable', {})">Ota moottori käyttöön</button>
-      <button onclick="postJson('/api/motor/disable', {})">Vapauta moottori</button>
-      <button class="danger" onclick="postJson('/api/stop', {})">PYSÄYTÄ MOOTTORI</button>
+      <button id="btnMotorEnable">Ota moottori käyttöön</button>
+      <button id="btnMotorDisable">Vapauta moottori</button>
+      <button id="btnStop" class="danger">PYSÄYTÄ MOOTTORI</button>
     </div>
   </div>
 </section>
