@@ -1,4 +1,8 @@
+import logging
 import random
+
+
+logger = logging.getLogger(__name__)
 
 
 class FlowSensor:
@@ -18,7 +22,11 @@ class FlowSensor:
             return 0.48 + 1.20 * self.mock_active_flow_lpm + random.uniform(-0.004, 0.004)
         if self.ads_reader is None:
             raise RuntimeError('ADS reader is required in raspberry_pi mode.')
-        measured_voltage = self.ads_reader.read_voltage(self.channel)
+        try:
+            measured_voltage = self.ads_reader.read_voltage(self.channel)
+        except Exception as exc:
+            logger.exception('Failed to read flow sensor on ADS1115 channel %s: %s', self.channel, exc)
+            raise
         if self.divider_ratio <= 0:
             raise ValueError('voltage_divider_ratio must be positive.')
         return measured_voltage / self.divider_ratio

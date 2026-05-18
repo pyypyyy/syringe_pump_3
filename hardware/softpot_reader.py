@@ -1,4 +1,8 @@
+import logging
 import random
+
+
+logger = logging.getLogger(__name__)
 
 
 class SoftpotReader:
@@ -25,4 +29,8 @@ class SoftpotReader:
             return self.mock_min_v + fraction * (self.mock_max_v - self.mock_min_v) + random.uniform(-0.003, 0.003)
         if self.ads_reader is None:
             raise RuntimeError('ADS reader is required in raspberry_pi mode.')
-        return self.ads_reader.read_voltage(self.channel)
+        try:
+            return self.ads_reader.read_voltage(self.channel)
+        except Exception as exc:
+            logger.exception('Failed to read softpot sensor on ADS1115 channel %s: %s', self.channel, exc)
+            raise
