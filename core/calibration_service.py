@@ -29,7 +29,11 @@ class CalibrationService:
         self.mode = 'idle'
         self.last_event = 'Application started'
         self.events = [self.last_event]
-        self.flow_run_status = {'running': False, 'result': None, 'error': None, 'phase': 'idle', 'last_failure_reason': None}
+        self.flow_run_status = {
+            'running': False, 'result': None, 'error': None, 'phase': 'idle', 'last_failure_reason': None,
+            'raw_softpot_voltage': None, 'raw_softpot_volume_ml': None, 'filtered_softpot_volume_ml': None,
+            'softpot_glitch_count': 0, 'last_rejected_softpot_sample': None, 'softpot_signal_unstable': False,
+        }
         self.flow_stop_requested = False
         self._flow_thread = None
         storage_cfg = config.get('storage', {})
@@ -90,7 +94,7 @@ class CalibrationService:
     def get_status(self):
         softpot_voltage = self.softpot.read_voltage(); softpot_volume = self.position_model.voltage_to_volume_ml(softpot_voltage) if self.position_model else None
         flow_voltage = self.flow_sensor.read_voltage()
-        return {'mode': self.mode,'softpot_voltage_v': softpot_voltage,'softpot_volume_ml': softpot_volume,'flow_voltage_v': flow_voltage,'flow_lpm': self.flow_sensor.estimate_flow_lpm(flow_voltage),'motor_enabled': self.stepper.enabled,'step_position': self.stepper.step_position,'step_position_valid': self.stepper.step_position_valid,'current_target_ml': self.softpot_calibrator.current_target,'calibration_points': [p.__dict__ for p in self.softpot_calibrator.points],'calibration_targets': self.softpot_calibrator.targets,'last_event': self.last_event,'events': list(reversed(self.events)),'flow_calibration_points': list(reversed(self.flow_calibration_points)),'flow_calibration': self.flow_run_status,'zero_flow_capture_by_gas': self.zero_flow_capture_by_gas,**self.flow_run_status}
+        return {'mode': self.mode,'softpot_voltage_v': softpot_voltage,'softpot_volume_ml': softpot_volume,'flow_voltage_v': flow_voltage,'flow_lpm': self.flow_sensor.estimate_flow_lpm(flow_voltage),'motor_enabled': self.stepper.enabled,'step_position': self.stepper.step_position,'step_position_valid': self.stepper.step_position_valid,'current_target_ml': self.softpot_calibrator.current_target,'calibration_points': [p.__dict__ for p in self.softpot_calibrator.points],'calibration_targets': self.softpot_calibrator.targets,'last_event': self.last_event,'events': list(reversed(self.events)),'flow_calibration_points': list(reversed(self.flow_calibration_points)),'flow_calibration': self.flow_run_status,'zero_flow_capture_by_gas': self.zero_flow_capture_by_gas,'raw_softpot_voltage': self.flow_run_status.get('raw_softpot_voltage', softpot_voltage),'raw_softpot_volume_ml': self.flow_run_status.get('raw_softpot_volume_ml', softpot_volume),'filtered_softpot_volume_ml': self.flow_run_status.get('filtered_softpot_volume_ml', softpot_volume),'softpot_glitch_count': self.flow_run_status.get('softpot_glitch_count', 0),'last_rejected_softpot_sample': self.flow_run_status.get('last_rejected_softpot_sample'),'softpot_signal_unstable': self.flow_run_status.get('softpot_signal_unstable', False),**self.flow_run_status}
 
     def start_flow_calibration(self, payload):
         if self.position_model is None: return {'ok': False, 'error': 'Softpot must be calibrated before flow calibration.'}

@@ -17,6 +17,67 @@ class TrialRunner:
         self.stop_checker = stop_checker
         self.status_callback = status_callback
         self.environment_reader = environment_reader
+        self._init_softpot_filter_state()
+
+    def _init_softpot_filter_state(self):
+        fc = self.config.get('flow_calibration', {})
+        self.softpot_filter_window = max(3, int(fc.get('softpot_filter_window', 5)))
+        self.softpot_max_jump_ml_per_sample = float(fc.get('softpot_max_jump_ml_per_sample', 3.0))
+        self.softpot_large_jump_accept_samples = max(1, int(fc.get('softpot_large_jump_accept_samples', 3)))
+        self.softpot_wrong_direction_persist_s = float(fc.get('softpot_wrong_direction_persist_s', 0.3))
+        self.softpot_max_reject_streak = max(1, int(fc.get('softpot_max_reject_streak', 15)))
+        self._softpot_raw_window = deque(maxlen=self.softpot_filter_window)
+        self._softpot_filtered_volume_ml = None
+        self._softpot_pending_jump = None
+        self._softpot_pending_count = 0
+        self._softpot_glitch_count = 0
+        self._softpot_reject_streak = 0
+        self._softpot_last_rejected = None
+
+    def _read_softpot_sample(self):
+        softpot_v = self.softpot.read_voltage()
+        raw_ml = self.position_model.voltage_to_volume_ml(softpot_v)
+        self._softpot_raw_window.append(raw_ml)
+        median_ml = sorted(self._softpot_raw_window)[len(self._softpot_raw_window) // 2]
+        rejected = False
+        if self._softpot_filtered_volume_ml is None:
+            self._softpot_filtered_volume_ml = median_ml
+            self._softpot_pending_jump = None
+            self._softpot_pending_count = 0
+        else:
+            jump = median_ml - self._softpot_filtered_volume_ml
+            if abs(jump) > self.softpot_max_jump_ml_per_sample:
+                pending_sign = 1 if jump > 0 else -1
+                if self._softpot_pending_jump and self._softpot_pending_jump['sign'] == pending_sign:
+                    self._softpot_pending_count += 1
+                else:
+                    self._softpot_pending_jump = {'sign': pending_sign, 'candidate': median_ml, 'jump_ml': jump}
+                    self._softpot_pending_count = 1
+                if self._softpot_pending_count >= self.softpot_large_jump_accept_samples:
+                    self._softpot_filtered_volume_ml = median_ml
+                    self._softpot_pending_jump = None
+                    self._softpot_pending_count = 0
+                else:
+                    rejected = True
+                    self._softpot_glitch_count += 1
+                    self._softpot_reject_streak += 1
+                    self._softpot_last_rejected = {
+                        'raw_softpot_voltage': softpot_v,
+                        'raw_softpot_volume_ml': raw_ml,
+                        'median_softpot_volume_ml': median_ml,
+                        'jump_ml': jump,
+                        'required_consecutive': self.softpot_large_jump_accept_samples,
+                        'seen_consecutive': self._softpot_pending_count,
+                        'timestamp_s': datetime.now(timezone.utc).isoformat(),
+                    }
+            else:
+                self._softpot_filtered_volume_ml = median_ml
+                self._softpot_pending_jump = None
+                self._softpot_pending_count = 0
+
+        if not rejected:
+            self._softpot_reject_streak = 0
+        return softpot_v, raw_ml, self._softpot_filtered_volume_ml, rejected
 
     def move_to_volume(self, target_ml, tolerance_ml=0.5, max_steps=100000):
         axis = self.config.get('axis', {})
@@ -106,6 +167,7 @@ class TrialRunner:
         }
 
     def run_trial(self, trial, csv_path):
+        self._init_softpot_filter_state()
         if self.stop_checker():
             return {'status': 'aborted', 'reason': 'User stop requested before trial start', 'raw_csv_path': str(csv_path), 'rows': [], 'summary': None}
         fc = self.config.get('flow_calibration', {})
@@ -127,7 +189,9 @@ class TrialRunner:
         dynamic_motion_timeout_s = max(base_motion_timeout_s, (adaptive_min_change_ml / expected_ml_s) * 3.0)
         logger = CsvLogger(csv_path, [
             'timestamp_s', 'elapsed_s', 'trial_id', 'gas', 'target_flow_lpm', 'softpot_voltage_v',
-            'softpot_volume_ml', 'flow_voltage_v', 'flow_lpm_live', 'actual_flow_lpm_window', 'motion_phase',
+            'softpot_volume_ml', 'raw_softpot_volume_ml', 'filtered_softpot_volume_ml', 'softpot_glitch_rejected',
+            'softpot_glitch_count', 'softpot_signal_unstable', 'last_rejected_softpot_sample',
+            'flow_voltage_v', 'flow_lpm_live', 'actual_flow_lpm_window', 'motion_phase',
             'step_count', 'position_ml_from_steps', 'temperature_c', 'ambient_pressure_hpa', 'relative_humidity_percent'
         ])
         rows, flow_window = [], deque()
@@ -151,7 +215,12 @@ class TrialRunner:
         def _record(phase_name):
             row = self._sample(trial, t0, phase_name, flow_window, window_s)
             rows.append(row); logger.write(row)
-            _set_status(latest_sample=row, phase=phase_name, latest_softpot_volume_ml=row['softpot_volume_ml'], current_target_flow_lpm=trial.target_flow_lpm)
+            _set_status(
+                latest_sample=row, phase=phase_name, latest_softpot_volume_ml=row['softpot_volume_ml'], current_target_flow_lpm=trial.target_flow_lpm,
+                raw_softpot_voltage=row['softpot_voltage_v'], raw_softpot_volume_ml=row['raw_softpot_volume_ml'],
+                filtered_softpot_volume_ml=row['filtered_softpot_volume_ml'], softpot_glitch_count=row['softpot_glitch_count'],
+                last_rejected_softpot_sample=row['last_rejected_softpot_sample'], softpot_signal_unstable=row['softpot_signal_unstable']
+            )
 
         try:
             phase = 'moving_to_start'
@@ -178,19 +247,43 @@ class TrialRunner:
                 motion_thread.start()
                 started = time.time()
                 expected_sign = -1 if direction_toward_empty else 1
-                stroke_baseline_ml = self.position_model.voltage_to_volume_ml(self.softpot.read_voltage())
+                _, _, stroke_baseline_ml, _ = self._read_softpot_sample()
                 motion_change_start = started
+                wrong_direction_start = None
                 self._log_phase_context(phase, trial.stroke_start_ml, trial.stroke_end_ml, stroke_baseline_ml, stroke_baseline_ml, direction_toward_empty)
                 while motion_thread.is_alive():
                     if self.stop_checker():
                         status, reason = 'aborted', 'User stop requested during stroke'; self.stepper.stop(); break
                     row = self._sample(trial, t0, phase, flow_window, window_s)
                     rows.append(row); logger.write(row)
-                    _set_status(latest_sample=row, phase=phase, latest_softpot_volume_ml=row['softpot_volume_ml'])
+                    _set_status(
+                        latest_sample=row, phase=phase, latest_softpot_volume_ml=row['softpot_volume_ml'],
+                        raw_softpot_voltage=row['softpot_voltage_v'], raw_softpot_volume_ml=row['raw_softpot_volume_ml'],
+                        filtered_softpot_volume_ml=row['filtered_softpot_volume_ml'], softpot_glitch_count=row['softpot_glitch_count'],
+                        last_rejected_softpot_sample=row['last_rejected_softpot_sample'], softpot_signal_unstable=row['softpot_signal_unstable']
+                    )
                     softpot_ml = row['softpot_volume_ml']
                     delta = softpot_ml - stroke_baseline_ml
-                    if delta * expected_sign < -softpot_direction_tolerance_ml:
-                        status, reason = 'failed', _failure_reason(f'softpot moved in wrong direction (delta={delta:.3f} ml, expected_sign={expected_sign:+d})', phase, row['elapsed_s'], softpot_ml); self.stepper.stop(); break
+                    raw_delta = row['raw_softpot_volume_ml'] - stroke_baseline_ml
+                    wrong_direction = (delta * expected_sign) < -softpot_direction_tolerance_ml
+                    logging.info(
+                        'softpot direction-check elapsed_s=%.3f raw_delta_ml=%.3f filtered_delta_ml=%.3f expected_sign=%+d rejected=%s',
+                        row['elapsed_s'], raw_delta, delta, expected_sign, row['softpot_glitch_rejected']
+                    )
+                    if wrong_direction:
+                        wrong_direction_start = wrong_direction_start or time.time()
+                        if (time.time() - wrong_direction_start) >= self.softpot_wrong_direction_persist_s:
+                            status, reason = 'failed', _failure_reason(
+                                f'softpot moved in wrong direction persistently (filtered_delta={delta:.3f} ml, raw_delta={raw_delta:.3f} ml, expected_sign={expected_sign:+d}, persist_s={self.softpot_wrong_direction_persist_s:.2f})',
+                                phase, row['elapsed_s'], softpot_ml
+                            ); self.stepper.stop(); break
+                    else:
+                        wrong_direction_start = None
+                    if self._softpot_reject_streak >= self.softpot_max_reject_streak:
+                        status, reason = 'failed', _failure_reason(
+                            f'softpot signal unstable / glitch rejected continuously (reject_streak={self._softpot_reject_streak}, glitch_count={self._softpot_glitch_count})',
+                            phase, row['elapsed_s'], softpot_ml
+                        ); self.stepper.stop(); break
                     if abs(delta) >= adaptive_min_change_ml:
                         motion_change_start = time.time()
                     if min(trial.stroke_start_ml, trial.stroke_end_ml) <= softpot_ml <= max(trial.stroke_start_ml, trial.stroke_end_ml):
@@ -224,12 +317,11 @@ class TrialRunner:
 
     def _sample(self, trial, t0, phase, flow_window, window_s):
         now = time.time()
-        softpot_v = self.softpot.read_voltage()
-        softpot_ml = self.position_model.voltage_to_volume_ml(softpot_v)
+        softpot_v, raw_softpot_ml, filtered_softpot_ml, rejected = self._read_softpot_sample()
         flow_v = self.flow_sensor.read_voltage()
         elapsed = now - t0
         env = self.environment_reader() if self.environment_reader else {}
-        flow_window.append((elapsed, softpot_ml))
+        flow_window.append((elapsed, filtered_softpot_ml))
         while len(flow_window) > 2 and (elapsed - flow_window[0][0]) > window_s:
             flow_window.popleft()
         actual_window = None
@@ -237,11 +329,19 @@ class TrialRunner:
             t_old, ml_old = flow_window[0]
             dt = elapsed - t_old
             if dt > 1e-9:
-                actual_window = abs((softpot_ml - ml_old) / dt) * 60.0 / 1000.0
+                actual_window = abs((filtered_softpot_ml - ml_old) / dt) * 60.0 / 1000.0
         return {
             'timestamp_s': datetime.now(timezone.utc).isoformat(), 'elapsed_s': elapsed,
             'trial_id': trial.trial_id, 'gas': trial.gas, 'target_flow_lpm': trial.target_flow_lpm,
-            'softpot_voltage_v': softpot_v, 'softpot_volume_ml': softpot_ml, 'flow_voltage_v': flow_v,
+            'softpot_voltage_v': softpot_v,
+            'softpot_volume_ml': filtered_softpot_ml,
+            'raw_softpot_volume_ml': raw_softpot_ml,
+            'filtered_softpot_volume_ml': filtered_softpot_ml,
+            'softpot_glitch_rejected': rejected,
+            'softpot_glitch_count': self._softpot_glitch_count,
+            'softpot_signal_unstable': self._softpot_reject_streak > 0,
+            'last_rejected_softpot_sample': self._softpot_last_rejected,
+            'flow_voltage_v': flow_v,
             'flow_lpm_live': self.flow_sensor.estimate_flow_lpm(flow_v), 'actual_flow_lpm_window': actual_window,
             'motion_phase': phase, 'step_count': self.stepper.step_position,
             'position_ml_from_steps': self.stepper.step_position / float(self.config.get('axis', {}).get('microsteps_per_ml', 208.0)),
