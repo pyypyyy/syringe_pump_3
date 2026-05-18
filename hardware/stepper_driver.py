@@ -218,6 +218,7 @@ class StepperDriver:
         elif self.mode == 'raspberry_pi':
             raise RuntimeError(f"stepper backend '{self.backend_name}' unavailable in raspberry_pi mode; refusing to simulate motion")
         else:
+            moved = 0
             step_delay_s = max(0.0001, float(duration_s) / max(steps, 1))
             for _ in range(steps):
                 if self.stop_requested:

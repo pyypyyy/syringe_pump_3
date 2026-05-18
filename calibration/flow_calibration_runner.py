@@ -52,7 +52,7 @@ class FlowCalibrationRunner:
         min_samples = int(qc.get('min_stable_samples', 10)); min_duration = float(qc.get('min_stable_duration_s', 1.0)); min_nonzero = float(qc.get('min_nonzero_flow_lpm', 0.001)); max_cv = float(qc.get('max_flow_cv', 0.15))
         trials_meta = []; accepted = []
         for idx, trial in enumerate(trials, start=1):
-            self.status_callback(current_trial={'gas': trial.gas, 'target_flow_lpm': trial.target_flow_lpm, 'repeat_index': trial.repeat_index}, completed_trials=idx - 1, total_trials=len(trials), current_target_flow_lpm=trial.target_flow_lpm, run_dir=str(run_dir))
+            self.status_callback(current_trial={'trial_id': trial.trial_id, 'gas': trial.gas, 'target_flow_lpm': trial.target_flow_lpm, 'repeat_index': trial.repeat_index}, completed_trials=idx - 1, total_trials=len(trials), current_target_flow_lpm=trial.target_flow_lpm, run_dir=str(run_dir), phase='moving_to_start')
             res = trial_runner.run_trial(trial, run_dir / f'{trial.trial_id}.csv')
             tstatus = res['status']; reason = res.get('reason'); stats = None
             if tstatus == 'completed':
@@ -69,6 +69,8 @@ class FlowCalibrationRunner:
             if tstatus == 'completed' and stats:
                 accepted.append(row)
             self.status_callback(completed_trials=idx, recent_trials=trials_meta[-5:])
+            if tstatus != 'completed':
+                self.status_callback(last_failure_reason=reason, phase='failed')
             if self.stop_checker():
                 break
 
