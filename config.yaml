@@ -66,6 +66,11 @@ flow_calibration:
   softpot_motion_timeout_s: 8.0
   softpot_min_change_ml: 0.1
   softpot_direction_tolerance_ml: 1.0
+  softpot_filter_window: 5
+  softpot_max_jump_ml_per_sample: 3.0
+  softpot_large_jump_accept_samples: 3
+  softpot_wrong_direction_persist_s: 0.3
+  softpot_max_reject_streak: 15
   stroke_timeout_margin_s: 5.0
 
   zero_flow:
