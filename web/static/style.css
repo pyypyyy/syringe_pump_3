@@ -52,3 +52,5 @@ button.danger { background: var(--danger); }
   .chart-grid { grid-template-columns: 1fr; }
   .calibration-summary { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
 }
+
+.message{margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#f8fafc}.message.success{background:#ecfdf5;border-color:#86efac}.message.error{background:#fef2f2;border-color:#fca5a5}.message.info{background:#eff6ff;border-color:#93c5fd}
