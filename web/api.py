@@ -86,6 +86,20 @@ def create_api_blueprint(service):
     def flow_stop():
         return jsonify(service.stop_flow_calibration())
 
+
+    @api_bp.post('/flow/auto-direction-diagnostic')
+    def flow_auto_direction_diagnostic():
+        data, err = parse_json()
+        if err:
+            return err
+        step_ml = data.get('step_ml', 0.5)
+        try:
+            step_ml = float(step_ml)
+        except (TypeError, ValueError):
+            return error('step_ml must be numeric')
+        res = service.auto_direction_diagnostic(step_ml=step_ml)
+        return jsonify(res), (200 if res.get('ok') else 400)
+
     @api_bp.get('/flow/status')
     def flow_status():
         st = service.get_status()

@@ -6,6 +6,7 @@ from motion.jog_controller import JogController
 from motion.softpot_calibrator import SoftpotCalibrator
 from core.calibration_store import FlowCalibrationStore
 from calibration.flow_calibration_runner import FlowCalibrationRunner
+from calibration.trial_runner import TrialRunner
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -147,6 +148,17 @@ class CalibrationService:
         self._set_flow_status(running=True, gas=gas, current_trial=None, completed_trials=0, total_trials=len(flows_lpm) * repeats, current_target_flow_lpm=None, latest_softpot_volume_ml=None, latest_flow_voltage_v=None, run_dir=None, result=None, error=None, phase='starting', last_failure_reason=None)
         self._flow_thread = threading.Thread(target=_run, daemon=True); self._flow_thread.start()
         return {'ok': True, 'run_id': 'starting', 'trial_count': len(flows_lpm) * repeats}
+
+
+    def auto_direction_diagnostic(self, step_ml=0.5):
+        if self.position_model is None:
+            return {'ok': False, 'error': 'Softpot must be calibrated before running diagnostic.'}
+        self.stepper.clear_stop()
+        trial_runner = TrialRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._is_stop_requested, self._set_flow_status, self._read_environment)
+        try:
+            return trial_runner.exercise_auto_direction(step_ml=step_ml)
+        except Exception as exc:
+            return {'ok': False, 'error': str(exc)}
 
     def stop_flow_calibration(self): self.flow_stop_requested = True; self.stepper.stop(); return {'ok': True}
     def flow_results(self): return {'ok': True, 'result': self.flow_run_status.get('result')}

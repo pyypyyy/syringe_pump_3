@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 class StepPulseBackend:
     name = 'base'
 
+    def resolve_dir_level(self, direction_toward_empty):
+        dir_level = 1 if bool(direction_toward_empty) else 0
+        if self.invert_direction:
+            dir_level = 0 if dir_level else 1
+        return dir_level
+
     def move_steps_timed(self, steps, direction_toward_empty, duration_s, stop_checker):
         raise NotImplementedError
 
@@ -41,9 +47,7 @@ class RPiGPIOBackend(StepPulseBackend):
         steps = int(abs(steps))
         if steps <= 0:
             return 0
-        dir_level = 1 if direction_toward_empty else 0
-        if self.invert_direction:
-            dir_level = 0 if dir_level else 1
+        dir_level = self.resolve_dir_level(direction_toward_empty)
         step_delay_s = max(0.0001, float(duration_s) / max(steps, 1))
         moved = 0
         self.gpio.output(self.dir_pin, dir_level)
@@ -77,15 +81,19 @@ class PigpioBackend(StepPulseBackend):
             self.pi.set_mode(self.enable_pin, pigpio_module.OUTPUT)
         self._active = False
 
+    def resolve_dir_level(self, direction_toward_empty):
+        dir_level = 1 if bool(direction_toward_empty) else 0
+        if self.invert_direction:
+            dir_level = 0 if dir_level else 1
+        return dir_level
+
     def move_steps_timed(self, steps, direction_toward_empty, duration_s, stop_checker):
         steps = int(abs(steps))
         if steps <= 0:
             return 0
         if stop_checker():
             return 0
-        dir_level = 1 if direction_toward_empty else 0
-        if self.invert_direction:
-            dir_level = 0 if dir_level else 1
+        dir_level = self.resolve_dir_level(direction_toward_empty)
         self.pi.write(self.dir_pin, dir_level)
         frequency = int(max(1.0, steps / max(duration_s, 1e-6)))
         self._active = True
@@ -177,6 +185,13 @@ class StepperDriver:
 
     def clear_stop(self):
         self.stop_requested = False
+
+    def resolve_dir_level(self, direction_toward_empty):
+        """Map logical direction to physical DIR pin level after invert_direction."""
+        dir_level = 1 if bool(direction_toward_empty) else 0
+        if self.invert_direction:
+            dir_level = 0 if dir_level else 1
+        return dir_level
 
     def cleanup(self):
         if self.pulse_backend:
