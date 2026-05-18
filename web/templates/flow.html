@@ -11,7 +11,7 @@
     <input id="strokeStartMl" type="number" value="100"><input id="strokeEndMl" type="number" value="0">
     <input id="analysisMinMl" type="number" value="10"><input id="analysisMaxMl" type="number" value="90">
   </div>
-  <div class="button-row"><button id="btnFlowZero">Capture zero</button><button id="btnFlowStart">Start automatic calibration</button><button id="btnFlowStop" class="danger">Stop calibration</button><button id="btnStop" class="danger">Emergency stop</button></div>
+  <div class="button-row"><button id="btnFlowZero">Capture zero</button><button id="btnFlowStart">Start automatic calibration</button><button id="btnFlowStartOne">Start 1 debug trial</button><button id="btnFlowStop" class="danger">Stop calibration</button><button id="btnStop" class="danger">Emergency stop</button></div>
 </section>
 <section class="panel"><h3>Status</h3>
 <ul>
@@ -19,8 +19,10 @@
 <li>Zero-flow captured: <span id="flowZeroStatus">--</span></li>
 <li>Current trial ID: <span id="flowCurrentTrial">--</span></li><li>Current target flow: <span id="flowCurrentTarget">--</span></li>
 <li>Current repeat: <span id="flowCurrentRepeat">--</span></li><li>Completed / Total: <span id="flowCompletedCount">--</span> / <span id="flowTotalCount">--</span></li>
+<li>Phase: <span id="flowPhase">--</span></li>
 <li>Accepted trials: <span id="flowAcceptedCount">--</span></li><li>Rejected trials: <span id="flowRejectedCount">--</span></li>
 <li>Run dir: <span id="flowRunDir">--</span></li><li>Latest volume: <span id="flowLatestVolume">--</span></li><li>Latest voltage: <span id="flowLatestVoltage">--</span></li><li>Latest actual flow: <span id="flowLatestActualFlow">--</span></li><li>Error: <span id="flowError">--</span></li>
+<li>Last failure reason: <span id="flowFailureReason">--</span></li>
 <li>Summary CSV: <span id="flowSummaryPath">--</span></li><li>Curve JSON: <span id="flowCurvePath">--</span></li>
 </ul></section>
 <section class="panel"><h3>Automatic calibration points (actual flow vs voltage)</h3><canvas id="autoCurveChart"></canvas><ul id="flowAcceptedPoints"></ul></section>

@@ -29,12 +29,20 @@ class TrialRunner:
             raise RuntimeError(f'volume outside safety bounds: {last_ml:.3f} ml')
         stable_count = 0
         moved = 0
+        fc = self.config.get('flow_calibration', {})
+        positioning_speed_lpm = float(fc.get('positioning_speed_lpm', self.config.get('jog', {}).get('jog_speed_lpm', 0.1)))
+        ml_per_s = max(1e-6, positioning_speed_lpm * 1000.0 / 60.0)
+        chunk_steps = max(1, int(steps_per_ml * 0.1))
+        chunk_duration_s = max(0.03, chunk_steps / (steps_per_ml * ml_per_s))
         while abs(last_ml - target_ml) > tolerance_ml:
             if self.stop_checker():
                 raise RuntimeError('stop requested')
             direction_toward_empty = last_ml > target_ml
-            self.stepper.move_steps(1, direction_toward_empty, step_delay_s=0.0008)
-            moved += 1
+            remaining_ml = abs(last_ml - target_ml)
+            steps_for_remaining = max(1, int(round(remaining_ml * steps_per_ml)))
+            steps_to_move = min(chunk_steps, steps_for_remaining)
+            self.stepper.move_steps_timed(steps_to_move, direction_toward_empty, chunk_duration_s)
+            moved += steps_to_move
             if self.softpot.mode == 'mock':
                 delta = -1.0 / steps_per_ml if direction_toward_empty else 1.0 / steps_per_ml
                 self.softpot.adjust_mock_volume(delta)
@@ -66,10 +74,13 @@ class TrialRunner:
         duration_s = max(0.2, stroke_ml / max(target_ml_s, 1e-9))
         steps_per_ml = float(self.config.get('axis', {}).get('microsteps_per_ml', 208.0))
         total_steps = int(stroke_ml * steps_per_ml)
-        softpot_motion_timeout_s = float(fc.get('softpot_motion_timeout_s', 2.0))
-        softpot_min_change_ml = float(fc.get('softpot_min_change_ml', 0.5))
+        base_motion_timeout_s = float(fc.get('softpot_motion_timeout_s', 8.0))
+        base_softpot_min_change_ml = float(fc.get('softpot_min_change_ml', 0.1))
         softpot_direction_tolerance_ml = float(fc.get('softpot_direction_tolerance_ml', 0.3))
-        stroke_timeout_margin_s = float(fc.get('stroke_timeout_margin_s', 2.0))
+        stroke_timeout_margin_s = float(fc.get('stroke_timeout_margin_s', 5.0))
+        expected_ml_s = max(1e-6, target_ml_s)
+        adaptive_min_change_ml = max(0.05, min(base_softpot_min_change_ml, expected_ml_s * max(sample_interval_s, 0.1) * 1.5))
+        dynamic_motion_timeout_s = max(base_motion_timeout_s, (adaptive_min_change_ml / expected_ml_s) * 3.0)
         logger = CsvLogger(csv_path, [
             'timestamp_s', 'elapsed_s', 'trial_id', 'gas', 'target_flow_lpm', 'softpot_voltage_v',
             'softpot_volume_ml', 'flow_voltage_v', 'flow_lpm_live', 'actual_flow_lpm_window', 'motion_phase',
@@ -80,21 +91,37 @@ class TrialRunner:
         status, reason = 'completed', None
         move_error = {'exc': None}
 
-        def _record(phase):
-            row = self._sample(trial, t0, phase, flow_window, window_s)
-            rows.append(row); logger.write(row)
+        phase = 'idle'
+
+        def _set_status(**kwargs):
             if self.status_callback:
-                self.status_callback(latest_sample=row)
+                self.status_callback(**kwargs)
+
+        def _failure_reason(message, phase_name, elapsed_s, latest_softpot_ml):
+            return (
+                f'{message}; phase={phase_name}; softpot_ml={latest_softpot_ml:.3f}; '
+                f'start_ml={trial.stroke_start_ml:.3f}; end_ml={trial.stroke_end_ml:.3f}; '
+                f'target_flow_lpm={trial.target_flow_lpm:.5f}; elapsed_s={elapsed_s:.2f}'
+            )
+
+        def _record(phase_name):
+            row = self._sample(trial, t0, phase_name, flow_window, window_s)
+            rows.append(row); logger.write(row)
+            _set_status(latest_sample=row, phase=phase_name, latest_softpot_volume_ml=row['softpot_volume_ml'], current_target_flow_lpm=trial.target_flow_lpm)
 
         try:
+            phase = 'moving_to_start'
+            _set_status(phase=phase, current_target_flow_lpm=trial.target_flow_lpm)
             self.move_to_volume(trial.stroke_start_ml, tolerance_ml=float(fc.get('position_tolerance_ml', 0.5)))
+            phase = 'settling_before'
             for _ in range(max(0, int(settle_before_s / sample_interval_s))):
                 if self.stop_checker():
                     status, reason = 'aborted', 'User stop requested during pre-settle'; break
-                _record('settle_before'); time.sleep(sample_interval_s)
+                _record(phase); time.sleep(sample_interval_s)
             if status == 'completed':
                 self.stepper.enable()
                 direction_toward_empty = trial.stroke_end_ml < trial.stroke_start_ml
+                phase = 'moving'
                 def _motion():
                     try:
                         self.stepper.move_steps_timed(total_steps, direction_toward_empty, duration_s)
@@ -109,16 +136,15 @@ class TrialRunner:
                 while motion_thread.is_alive():
                     if self.stop_checker():
                         status, reason = 'aborted', 'User stop requested during stroke'; self.stepper.stop(); break
-                    row = self._sample(trial, t0, 'moving', flow_window, window_s)
+                    row = self._sample(trial, t0, phase, flow_window, window_s)
                     rows.append(row); logger.write(row)
-                    if self.status_callback:
-                        self.status_callback(latest_sample=row)
+                    _set_status(latest_sample=row, phase=phase, latest_softpot_volume_ml=row['softpot_volume_ml'])
                     softpot_ml = row['softpot_volume_ml']
                     if last_softpot_ml is not None:
                         delta = softpot_ml - last_softpot_ml
                         if delta * expected_sign < -softpot_direction_tolerance_ml:
-                            status, reason = 'failed', f'softpot moved in wrong direction (delta={delta:.3f} ml)'; self.stepper.stop(); break
-                        if abs(delta) >= softpot_min_change_ml:
+                            status, reason = 'failed', _failure_reason(f'softpot moved in wrong direction (delta={delta:.3f} ml, expected_sign={expected_sign:+d})', phase, row['elapsed_s'], softpot_ml); self.stepper.stop(); break
+                        if abs(delta) >= adaptive_min_change_ml:
                             motion_change_start = time.time()
                     if min(trial.stroke_start_ml, trial.stroke_end_ml) <= softpot_ml <= max(trial.stroke_start_ml, trial.stroke_end_ml):
                         if (direction_toward_empty and softpot_ml <= trial.stroke_end_ml) or ((not direction_toward_empty) and softpot_ml >= trial.stroke_end_ml):
@@ -126,25 +152,28 @@ class TrialRunner:
                     safety = self.config.get('safety', {})
                     safe_min = float(safety.get('min_volume_ml', 0.0)); safe_max = float(safety.get('max_volume_ml', self.config.get('axis', {}).get('syringe_volume_ml', 100.0)))
                     if softpot_ml < safe_min or softpot_ml > safe_max:
-                        status, reason = 'failed', f'softpot outside safety bounds: {softpot_ml:.3f} ml'; self.stepper.stop(); break
-                    if (time.time() - motion_change_start) > softpot_motion_timeout_s:
-                        status, reason = 'failed', 'softpot not changing while motor commanded'; self.stepper.stop(); break
+                        status, reason = 'failed', _failure_reason(f'softpot outside safety bounds: {softpot_ml:.3f} ml', phase, row['elapsed_s'], softpot_ml); self.stepper.stop(); break
+                    if (time.time() - motion_change_start) > dynamic_motion_timeout_s:
+                        status, reason = 'failed', _failure_reason(f'softpot not changing while motor commanded (timeout_s={dynamic_motion_timeout_s:.2f}, min_change_ml={adaptive_min_change_ml:.3f})', phase, row['elapsed_s'], softpot_ml); self.stepper.stop(); break
                     if (time.time() - started) > (duration_s + stroke_timeout_margin_s):
-                        status, reason = 'failed', 'stroke timeout'; self.stepper.stop(); break
+                        status, reason = 'failed', _failure_reason('stroke timeout', phase, row['elapsed_s'], softpot_ml); self.stepper.stop(); break
                     last_softpot_ml = softpot_ml
                     time.sleep(sample_interval_s)
                 motion_thread.join(timeout=1.0)
                 if move_error['exc'] is not None:
                     raise move_error['exc']
             if status == 'completed':
+                phase = 'settling_after'
                 for _ in range(max(0, int(settle_after_s / sample_interval_s))):
                     if self.stop_checker():
                         status, reason = 'aborted', 'User stop requested during post-settle'; break
-                    _record('settle_after'); time.sleep(sample_interval_s)
+                    _record(phase); time.sleep(sample_interval_s)
+            phase = 'completed' if status == 'completed' else 'failed'
         except Exception as exc:
-            status = 'failed'; reason = str(exc); self.stepper.stop()
+            status = 'failed'; reason = _failure_reason(f'backend exception: {exc}', phase or 'unknown', time.time() - t0, self.position_model.voltage_to_volume_ml(self.softpot.read_voltage())); self.stepper.stop()
         finally:
             logger.close()
+            _set_status(phase='completed' if status == 'completed' else 'failed', last_failure_reason=None if status == 'completed' else reason)
         return {'status': status, 'reason': reason, 'raw_csv_path': str(csv_path), 'rows': rows, 'summary': None}
 
     def _sample(self, trial, t0, phase, flow_window, window_s):

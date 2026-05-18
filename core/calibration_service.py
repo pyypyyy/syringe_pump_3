@@ -28,7 +28,7 @@ class CalibrationService:
         self.mode = 'idle'
         self.last_event = 'Application started'
         self.events = [self.last_event]
-        self.flow_run_status = {'running': False, 'result': None, 'error': None}
+        self.flow_run_status = {'running': False, 'result': None, 'error': None, 'phase': 'idle', 'last_failure_reason': None}
         self.flow_stop_requested = False
         self._flow_thread = None
         storage_cfg = config.get('storage', {})
@@ -126,7 +126,7 @@ class CalibrationService:
         runner = FlowCalibrationRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._set_flow_status, self._is_stop_requested, self._read_environment)
 
         def _run():
-            self.mode = 'flow_calibration'; self._set_flow_status(running=True, error=None)
+            self.mode = 'flow_calibration'; self._set_flow_status(running=True, error=None, phase='moving_to_start', last_failure_reason=None)
             try:
                 result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml, self.zero_flow_capture_by_gas.get(gas))
                 self._set_flow_status(
@@ -137,14 +137,14 @@ class CalibrationService:
                 )
                 self.log(f"Flow calibration completed for {gas}: {result['run_id']}")
             except Exception as exc:
-                self._set_flow_status(error=str(exc))
+                self._set_flow_status(error=str(exc), phase='failed', last_failure_reason=f'backend exception: {exc}')
                 self.mode = 'error'
                 self.log(f'Flow calibration failed: {exc}')
             finally:
                 self._set_flow_status(running=False)
-                if self.mode == 'flow_calibration': self.mode = 'idle'
+                if self.mode == 'flow_calibration': self.mode = 'idle'; self._set_flow_status(phase='idle')
 
-        self._set_flow_status(running=True, gas=gas, current_trial=None, completed_trials=0, total_trials=len(flows_lpm) * repeats, current_target_flow_lpm=None, latest_softpot_volume_ml=None, latest_flow_voltage_v=None, run_dir=None, result=None, error=None)
+        self._set_flow_status(running=True, gas=gas, current_trial=None, completed_trials=0, total_trials=len(flows_lpm) * repeats, current_target_flow_lpm=None, latest_softpot_volume_ml=None, latest_flow_voltage_v=None, run_dir=None, result=None, error=None, phase='starting', last_failure_reason=None)
         self._flow_thread = threading.Thread(target=_run, daemon=True); self._flow_thread.start()
         return {'ok': True, 'run_id': 'starting', 'trial_count': len(flows_lpm) * repeats}
 
