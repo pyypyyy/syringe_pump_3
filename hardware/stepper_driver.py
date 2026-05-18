@@ -1,6 +1,13 @@
 import time
 import logging
 
+from hardware.pin_config import (
+    STEPPER_DIR_PIN,
+    STEPPER_ENABLE_ACTIVE_LOW,
+    STEPPER_ENABLE_PIN,
+    STEPPER_STEP_PIN,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +120,10 @@ class StepperDriver:
         self.config = config
         self.mode = config.get('hardware', {}).get('mode', 'mock')
         stepper_cfg = config.get('stepper', {})
-        self.step_pin = int(stepper_cfg.get('step_pin', 18))
-        self.dir_pin = int(stepper_cfg.get('dir_pin', 20))
-        self.enable_pin = int(stepper_cfg.get('enable_pin', 16))
-        self.enable_active_low = bool(stepper_cfg.get('enable_active_low', True))
+        self.step_pin = int(stepper_cfg.get('step_pin', STEPPER_STEP_PIN))
+        self.dir_pin = int(stepper_cfg.get('dir_pin', STEPPER_DIR_PIN))
+        self.enable_pin = int(stepper_cfg.get('enable_pin', STEPPER_ENABLE_PIN))
+        self.enable_active_low = bool(stepper_cfg.get('enable_active_low', STEPPER_ENABLE_ACTIVE_LOW))
         self.invert_direction = bool(stepper_cfg.get('invert_direction', False))
         self.backend_name = stepper_cfg.get('backend', 'rpi_gpio' if self.mode == 'raspberry_pi' else 'mock')
         self.enabled = False
@@ -132,6 +139,7 @@ class StepperDriver:
         if self.backend_name == 'pigpio':
             import pigpio
             self.pulse_backend = PigpioBackend(pigpio, self.step_pin, self.dir_pin, self.invert_direction, self.enable_pin, self.enable_active_low)
+            self.disable()
         else:
             try:
                 import RPi.GPIO as GPIO

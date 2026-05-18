@@ -28,8 +28,8 @@ bme280:
 stepper:
   backend: "mock"
   step_pin: 18
-  dir_pin: 20
-  enable_pin: 16
+  dir_pin: 4
+  enable_pin: 21
   enable_active_low: true
   invert_direction: false
 axis:

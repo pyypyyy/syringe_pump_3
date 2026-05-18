@@ -64,8 +64,8 @@ Current mapping in `config.yaml`:
 
 Current mapping in `config.yaml`:
 - `stepper.step_pin: 18`
-- `stepper.dir_pin: 20`
-- `stepper.enable_pin: 16`
+- `stepper.dir_pin: 4`
+- `stepper.enable_pin: 21`
 
 If you use pigpio hardware PWM pulse generation, keep STEP on GPIO18 as configured.
 
@@ -77,3 +77,15 @@ If you use pigpio hardware PWM pulse generation, keep STEP on GPIO18 as configur
 - `hardware/` = sensors and stepper drivers
 - `motion/` = jog and softpot calibration support
 - `calibration/` = trial execution and calibration runs
+
+
+### 5) Confirmed Raspberry Pi → stepper driver wiring
+
+- `GPIO21` → `EN / ENABLE`
+- `GPIO18` → `STEP / PUL`
+- `GPIO4` → `DIR`
+- `Pi GND` → `Driver logic GND`
+
+`hardware/pin_config.py` is the single authoritative default pin map. `config.yaml` can override it if needed.
+
+`stepper.enable_active_low: true` means ENABLE is active-low (LOW=enabled, HIGH=disabled). On startup, the driver is put into the disabled state before any step pulses are generated.
