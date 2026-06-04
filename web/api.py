@@ -110,6 +110,11 @@ def create_api_blueprint(service):
     def flow_results():
         return jsonify(service.flow_results())
 
+    @api_bp.get('/flow/latest-result')
+    def flow_latest_result():
+        res = service.latest_flow_result()
+        return jsonify(res), (200 if res.get('ok') else 404)
+
     @api_bp.post('/flow-calibration/capture')
     def flow_calibration_capture():
         data, err = parse_json()

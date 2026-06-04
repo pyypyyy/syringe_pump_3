@@ -186,3 +186,15 @@ def test_exercise_auto_direction_uses_auto_path(tmp_path):
     assert out['ok'] is True
     assert out['delta_toward_empty_ml'] < 0
     assert out['delta_toward_full_ml'] > 0
+
+
+def test_rejected_trials_have_reason_and_exclude_accepted():
+    from calibration.flow_calibration_runner import rejected_trials_from_meta
+
+    trials_meta = [
+        {'trial_id': 'accepted', 'target_flow_lpm': 0.1, 'status': 'accepted', 'reason': None},
+        {'trial_id': 'failed', 'target_flow_lpm': 0.2, 'status': 'failed', 'reason': None},
+    ]
+    rejected = rejected_trials_from_meta(trials_meta)
+    assert [x['trial_id'] for x in rejected] == ['failed']
+    assert rejected[0]['reason'] == 'Trial status was failed'
