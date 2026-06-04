@@ -111,25 +111,182 @@ function renderSoftpotCalibration(data) {
   }
 }
 
+function automaticCurveFromPayload(payload) {
+  const fc = payload?.flow_calibration || payload?.automatic_flow_calibration || payload || {};
+  const outer = fc.result || payload?.result || null;
+  const curve = outer?.result || outer;
+  if (curve?.model || curve?.fit_quality || curve?.zero_flow) return { fc, outer: outer || fc, curve };
+  return { fc, outer: outer || fc, curve: null };
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rangeText(values, digits, suffix) {
+  const nums = values.map(numberOrNull).filter(v => v !== null);
+  if (!nums.length) return "--";
+  return `${Math.min(...nums).toFixed(digits)}–${Math.max(...nums).toFixed(digits)}${suffix}`;
+}
+
+function renderAutomaticSummaryCards(curve, points) {
+  const el = document.getElementById("automaticFlowSummaryCards");
+  if (!el) return;
+  const q = curve?.fit_quality || {};
+  const targetActual = q.target_vs_actual || {};
+  const repeatability = q.repeatability || {};
+  const validVoltageRange = curve?.valid_voltage_range_v || rangeText(points.map(p => p.mean_voltage_v), 4, " V");
+  const validFlowRange = curve?.valid_flow_range_lpm || rangeText(points.map(p => p.mean_actual_flow_lpm), 4, " L/min");
+  const zeroFlowVoltage = curve?.zero_flow?.voltage_v;
+  const cards = [
+    { k: "Usable", v: curve ? (curve.usable ? "yes" : "no") : "--" },
+    { k: "Model type", v: curve?.model?.type || "--" },
+    { k: "Valid voltage range", v: typeof validVoltageRange === "string" ? validVoltageRange : `${fmt(validVoltageRange?.[0], 4, " V")}–${fmt(validVoltageRange?.[1], 4, " V")}` },
+    { k: "Valid flow range", v: typeof validFlowRange === "string" ? validFlowRange : `${fmt(validFlowRange?.[0], 4, " L/min")}–${fmt(validFlowRange?.[1], 4, " L/min")}` },
+    { k: "Zero-flow voltage", v: fmt(zeroFlowVoltage, 4, " V") },
+    { k: "Accepted points", v: String(q.accepted_point_count ?? points.length ?? "--") },
+    { k: "Accepted trials", v: String(q.accepted_trial_count ?? "--") },
+    { k: "Rejected trials", v: String(q.rejected_trial_count ?? curve?.rejected_trials?.length ?? "--") },
+    { k: "Target mean error", v: fmt(targetActual.mean_delta_lpm, 4, " L/min") },
+    { k: "Target std error", v: fmt(targetActual.std_delta_lpm, 4, " L/min") },
+    { k: "Target max error", v: fmt(targetActual.max_abs_delta_lpm, 4, " L/min") },
+    { k: "Mean repeatability", v: fmt(repeatability.mean_std_actual_flow_lpm, 4, " L/min") },
+  ];
+  el.innerHTML = cards.map(card => `<div class="summary-card"><div class="k">${card.k}</div><div class="v">${card.v}</div></div>`).join("");
+}
+
+function renderAutomaticRangeNote(curve, points) {
+  const el = document.getElementById("automaticFlowRangeNote");
+  if (!el) return;
+  if (!curve) { el.textContent = "No automatic calibration result loaded yet."; return; }
+  const requested = points.map(p => p.target_flow_lpm).map(numberOrNull).filter(v => v !== null);
+  const actual = points.map(p => p.mean_actual_flow_lpm).map(numberOrNull).filter(v => v !== null);
+  const usable = curve.usable ? "Calibration is usable" : "Calibration is not usable";
+  const requestedRange = requested.length ? `${Math.min(...requested).toFixed(3)}–${Math.max(...requested).toFixed(3)} L/min requested targets` : "requested range unknown";
+  const actualRange = actual.length ? `${Math.min(...actual).toFixed(3)}–${Math.max(...actual).toFixed(3)} L/min accepted actual range` : "no accepted range";
+  const rejected = curve.rejected_trials?.length || 0;
+  el.textContent = `${usable}; ${actualRange} from ${requestedRange}. ${rejected ? `${rejected} trial(s) were rejected; review reasons below.` : "No rejected trials reported."}`;
+}
+
+function renderAcceptedPoints(points) {
+  const el = document.getElementById("flowAcceptedPoints");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!points.length) {
+    const li = document.createElement("li");
+    li.textContent = "No accepted model points yet.";
+    el.appendChild(li);
+    return;
+  }
+  for (const p of points) {
+    const li = document.createElement("li");
+    li.textContent = `target ${fmt(p.target_flow_lpm, 4, " L/min")} | actual ${fmt(p.mean_actual_flow_lpm, 4, " L/min")} | voltage ${fmt(p.mean_voltage_v, 4, " V")} | trials ${p.trial_count ?? "--"} | actual std ${fmt(p.std_actual_flow_lpm, 4, " L/min")} | voltage std ${fmt(p.std_voltage_v, 4, " V")}`;
+    el.appendChild(li);
+  }
+}
+
+function renderRejectedTrials(curve) {
+  const el = document.getElementById("flowRejectedTrials");
+  if (!el) return;
+  el.innerHTML = "";
+  const rejected = curve?.rejected_trials || [];
+  if (!rejected.length) {
+    const li = document.createElement("li");
+    li.textContent = "No rejected trials.";
+    el.appendChild(li);
+    return;
+  }
+  for (const trial of rejected) {
+    const li = document.createElement("li");
+    li.textContent = `${trial.trial_id || "trial"} | target ${fmt(trial.target_flow_lpm, 4, " L/min")} | status ${trial.status || "rejected"} | reason: ${trial.reason || "No reason recorded"}`;
+    el.appendChild(li);
+  }
+}
+
+function renderRecentTrials(fc, outer) {
+  const el = document.getElementById("flowRecentTrials");
+  if (!el) return;
+  el.innerHTML = "";
+  const trials = fc?.recent_trials || outer?.recent_trials || outer?.trial_statuses || fc?.trial_statuses || [];
+  if (!trials.length) {
+    const li = document.createElement("li");
+    li.textContent = "No trial summaries yet.";
+    el.appendChild(li);
+    return;
+  }
+  for (const trial of trials.slice(-10).reverse()) {
+    const li = document.createElement("li");
+    li.textContent = `${trial.trial_id || "trial"} | target ${fmt(trial.target_flow_lpm, 4, " L/min")} | repeat ${trial.repeat_index ?? "--"} | status ${trial.status || "--"} | actual ${fmt(trial.actual_flow_lpm, 4, " L/min")} | voltage ${fmt(trial.mean_flow_voltage_v, 4, " V")} | ${trial.reason || "No reason recorded"}`;
+    el.appendChild(li);
+  }
+}
+
+function renderAutomaticCharts(curve, points) {
+  const chartPoints = points.map(p => ({ x: numberOrNull(p.mean_voltage_v), y: numberOrNull(p.mean_actual_flow_lpm) })).filter(p => p.x !== null && p.y !== null).sort((a, b) => a.x - b.x);
+  const linePoints = curve?.model?.type === "piecewise_linear" ? chartPoints : [];
+  ensureChart("autoCurveChart", { type: "scatter", data: { datasets: [
+    { label: "Accepted model points", data: chartPoints, backgroundColor: "#2563eb" },
+    { label: "Piecewise linear curve", data: linePoints, showLine: true, borderColor: "#1a7f37", backgroundColor: "#1a7f37", pointRadius: 0 },
+  ] }, options: { parsing: false, scales: { x: { title: { display: true, text: "Mean flow sensor voltage (V)" } }, y: { title: { display: true, text: "Mean actual flow (L/min)" } } } } });
+
+  const targetPoints = points.map(p => ({ x: numberOrNull(p.target_flow_lpm), y: numberOrNull(p.mean_actual_flow_lpm) })).filter(p => p.x !== null && p.y !== null).sort((a, b) => a.x - b.x);
+  const allVals = targetPoints.flatMap(p => [p.x, p.y]);
+  const minVal = allVals.length ? Math.min(...allVals) : 0;
+  const maxVal = allVals.length ? Math.max(...allVals) : 1;
+  ensureChart("targetActualChart", { type: "scatter", data: { datasets: [
+    { label: "Target vs actual", data: targetPoints, backgroundColor: "#dc2626" },
+    { label: "Ideal y=x", data: [{ x: minVal, y: minVal }, { x: maxVal, y: maxVal }], showLine: true, borderColor: "#64748b", pointRadius: 0 },
+  ] }, options: { parsing: false, scales: { x: { title: { display: true, text: "Target flow (L/min)" } }, y: { title: { display: true, text: "Mean actual flow (L/min)" } } } } });
+}
+
+function renderAutomaticFlowResults(payload) {
+  const { fc, outer, curve } = automaticCurveFromPayload(payload);
+  const points = curve?.model?.points || [];
+  const q = curve?.fit_quality || {};
+  setText("flowAcceptedCount", String(q.accepted_trial_count ?? "--"));
+  setText("flowRejectedCount", String(q.rejected_trial_count ?? curve?.rejected_trials?.length ?? "--"));
+  renderAutomaticSummaryCards(curve, points);
+  renderAutomaticRangeNote(curve, points);
+  renderAcceptedPoints(points);
+  renderRejectedTrials(curve);
+  renderRecentTrials(fc, outer);
+  renderAutomaticCharts(curve, points);
+}
+
 async function updateStatus() {
   const data = await apiGet("/api/status");
   setText("softpotVoltage", fmt(data.softpot_voltage_v, 4, " V"));
-  setText("softpotVolume", data.softpot_volume_ml === null ? "ei kalibroitu" : fmt(data.softpot_volume_ml, 2, " ml"));
+  setText("softpotVolume", fmt(data.softpot_volume_ml, 2, " ml"));
   setText("flowVoltage", fmt(data.flow_voltage_v, 4, " V"));
   setText("flowLpm", fmt(data.flow_lpm, 4, " L/min"));
-  setText("motorEnabled", data.motor_enabled === undefined ? "--" : (data.motor_enabled ? "päällä" : "pois"));
+  setText("motorState", data.motor_enabled ? "ENABLED" : "disabled");
+  setText("stepPosition", `${data.step_position} (${data.step_position_valid ? "valid" : "not homed"})`);
   setText("mode", data.mode || "--");
-  setText("lastError", data.error || data.last_error || "--");
-  renderEvents(data);
-  renderFlowCalibrationPoints(data);
-  renderSoftpotCalibration(data);
+  setText("lastEvent", data.last_event || "--");
+  setText("rawSoftpotVoltage", fmt(data.raw_softpot_voltage ?? data.softpot_voltage_v, 4, " V"));
+  setText("rawSoftpotVolume", fmt(data.raw_softpot_volume_ml ?? data.softpot_volume_ml, 2, " ml"));
+  setText("filteredSoftpotVolume", fmt(data.filtered_softpot_volume_ml ?? data.softpot_volume_ml, 2, " ml"));
+  setText("softpotGlitchCount", String(data.softpot_glitch_count ?? 0));
+  const rejected = data.last_rejected_softpot_sample; setText("lastRejectedSoftpot", rejected ? `${fmt(rejected.raw_volume_ml,2," ml")} reason=${rejected.reason}` : "--");
+  renderEvents(data); renderSoftpotCalibration(data); renderFlowCalibrationPoints(data);
   const points = data.flow_calibration_points || [];
   renderSummary(points); renderCoverage(points); renderRecommendation(points); renderCharts(points);
   renderAutomaticFlowStatus(data);
+  const fc = data.flow_calibration || data.automatic_flow_calibration || data;
+  if (document.getElementById("automaticFlowSummaryCards") && !fc?.running && !automaticCurveFromPayload(data).curve) {
+    try {
+      const response = await fetch("/api/flow/latest-result");
+      if (response.ok) renderAutomaticFlowResults(await parseResponse(response));
+      else renderAutomaticFlowResults(data);
+    } catch (err) {
+      renderAutomaticFlowResults(data);
+    }
+  }
 }
 
-function renderAutomaticFlowStatus(data){ const fc = data.flow_calibration || data.automatic_flow_calibration || data; const gas = fc.gas || '--'; const zeroCap = gas !== '--' ? (data.zero_flow_capture_by_gas?.[gas] || null) : null; setText('flowRunning', fc.running ? 'yes':'no'); setText('flowGas', fc.gas || '--'); setText('flowZeroStatus', zeroCap ? `yes (${fmt(zeroCap.voltage_v,4,' V')})` : 'no'); setText('flowCurrentTrial', fc.current_trial?.trial_id || fc.current_trial || '--'); setText('flowCurrentTarget', fc.current_trial?.target_flow_lpm ?? fc.current_target_flow_lpm ?? '--'); setText('flowCurrentRepeat', fc.current_trial?.repeat_index ?? '--'); setText('flowPhase', fc.phase || '--'); setText('flowCompletedCount', String(fc.completed_count ?? fc.completed_trials ?? '--')); setText('flowTotalCount', String(fc.total_count ?? fc.total_trials ?? '--')); setText('flowRunDir', fc.run_dir || '--'); const unstableMsg = fc.softpot_signal_unstable ? ' | Softpot signal unstable / glitch rejected' : ''; setText('flowError', (fc.error || '--') + unstableMsg); setText('flowFailureReason', fc.last_failure_reason || '--'); if (fc.latest_sample){ setText('flowLatestVolume', fmt(fc.latest_sample.softpot_volume_ml,2,' ml')); setText('flowLatestVoltage', fmt(fc.latest_sample.flow_voltage_v,4,' V')); setText('flowLatestActualFlow', fmt(fc.latest_sample.actual_flow_lpm_window,4,' L/min')); } if (fc.result?.run_dir){ setText('flowSummaryPath', `${fc.result.run_dir}/summary.csv`); setText('flowCurvePath', `${fc.result.run_dir}/calibration_curve.json`); }
-  setText('dashSelectedGas', gas); setText('dashZeroFlow', zeroCap ? 'yes' : 'no'); setText('dashLatestAutoCalibration', fc.result?.run_id || '--'); }
+function renderAutomaticFlowStatus(data){ const fc = data.flow_calibration || data.automatic_flow_calibration || data; const gas = fc.gas || '--'; const zeroCap = gas !== '--' ? (data.zero_flow_capture_by_gas?.[gas] || null) : null; setText('flowRunning', fc.running ? 'yes':'no'); setText('flowGas', fc.gas || '--'); setText('flowZeroStatus', zeroCap ? `yes (${fmt(zeroCap.voltage_v,4,' V')})` : 'no'); setText('flowCurrentTrial', fc.current_trial?.trial_id || fc.current_trial || '--'); setText('flowCurrentTarget', fc.current_trial?.target_flow_lpm ?? fc.current_target_flow_lpm ?? '--'); setText('flowCurrentRepeat', fc.current_trial?.repeat_index ?? '--'); setText('flowPhase', fc.phase || '--'); setText('flowCompletedCount', String(fc.completed_count ?? fc.completed_trials ?? '--')); setText('flowTotalCount', String(fc.total_count ?? fc.total_trials ?? '--')); setText('flowRunDir', fc.run_dir || fc.result?.run_dir || fc.result?.source_run_dir || '--'); const unstableMsg = fc.softpot_signal_unstable ? ' | Softpot signal unstable / glitch rejected' : ''; setText('flowError', (fc.error || '--') + unstableMsg); setText('flowFailureReason', fc.last_failure_reason || '--'); if (fc.latest_sample){ setText('flowLatestVolume', fmt(fc.latest_sample.softpot_volume_ml,2,' ml')); setText('flowLatestVoltage', fmt(fc.latest_sample.flow_voltage_v,4,' V')); setText('flowLatestActualFlow', fmt(fc.latest_sample.actual_flow_lpm_window,4,' L/min')); } const outer = fc.result || data.result || {}; const curve = outer.result || outer; const runDir = outer.run_dir || curve.source_run_dir || fc.run_dir; if (runDir){ setText('flowSummaryPath', `${runDir}/summary.csv`); setText('flowCurvePath', `${runDir}/calibration_curve.json`); }
+  setText('dashSelectedGas', gas); setText('dashZeroFlow', zeroCap ? 'yes' : 'no'); setText('dashLatestAutoCalibration', fc.result?.run_id || data.result?.run_id || '--'); renderAutomaticFlowResults(data); }
 
 async function captureZeroFlow(){ const gas=document.getElementById('autoFlowGas')?.value||'air'; return postJson('/api/flow/zero-capture',{gas}); }
 async function startAutomaticFlowCalibration() { const gas = document.getElementById("autoFlowGas")?.value; const flows = (document.getElementById("autoFlows")?.value || "").split(",").map(x => Number(x.trim())).filter(x => Number.isFinite(x) && x > 0); const repeats = Number(document.getElementById("autoRepeats")?.value || 1); const strokeStartMl = Number(document.getElementById("strokeStartMl")?.value || 100); const strokeEndMl = Number(document.getElementById("strokeEndMl")?.value || 0); const analysisMinMl = Number(document.getElementById("analysisMinMl")?.value || 10); const analysisMaxMl = Number(document.getElementById("analysisMaxMl")?.value || 90); if (!flows.length) { setMessage("error", "Please enter at least one valid flow rate."); return; } return postJson('/api/flow/start', {gas, flows_lpm: flows, repeats, stroke_start_ml: strokeStartMl, stroke_end_ml: strokeEndMl, analysis_min_ml: analysisMinMl, analysis_max_ml: analysisMaxMl}); }

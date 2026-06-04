@@ -124,3 +124,37 @@ def test_flow_failed_motion_sets_error_and_not_running(client, monkeypatch):
     st = client.get('/api/flow/status').get_json()
     assert st['running'] is False
     assert 'motion failed' in (st.get('error') or '')
+
+
+def test_flow_latest_result_loads_newest_run(client, tmp_path):
+    older = tmp_path / 'output' / 'raw' / 'flow_calibration_air_2026-01-01_000000'
+    newer = tmp_path / 'output' / 'raw' / 'flow_calibration_air_2026-01-02_000000'
+    older.mkdir(parents=True)
+    newer.mkdir(parents=True)
+    for run_dir, target in [(older, 0.1), (newer, 0.2)]:
+        (run_dir / 'calibration_curve.json').write_text(
+            '{"gas":"air","zero_flow":{"voltage_v":0.01},"model":{"type":"piecewise_linear","points":[{"target_flow_lpm":%s,"mean_actual_flow_lpm":%s,"mean_voltage_v":1.2,"trial_count":3,"std_actual_flow_lpm":0.001,"std_voltage_v":0.002}]},"fit_quality":{"accepted_point_count":1,"accepted_trial_count":3,"rejected_trial_count":0},"rejected_trials":[],"usable":false}' % (target, target),
+            encoding='utf-8',
+        )
+        (run_dir / 'summary.csv').write_text('trial_id,status,target_flow_lpm\nt1,accepted,%s\n' % target, encoding='utf-8')
+    resp = client.get('/api/flow/latest-result')
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data['ok'] is True
+    assert data['run_id'] == newer.name
+    assert data['result']['model']['points'][0]['target_flow_lpm'] == 0.2
+    assert data['trial_statuses'][0]['status'] == 'accepted'
+
+
+def test_flow_results_falls_back_to_latest_run(client, tmp_path):
+    run_dir = tmp_path / 'output' / 'raw' / 'flow_calibration_air_2026-01-03_000000'
+    run_dir.mkdir(parents=True)
+    (run_dir / 'calibration_curve.json').write_text(
+        '{"gas":"air","model":{"type":"piecewise_linear","points":[]},"fit_quality":{"accepted_point_count":0,"accepted_trial_count":0,"rejected_trial_count":0},"rejected_trials":[],"usable":false}',
+        encoding='utf-8',
+    )
+    resp = client.get('/api/flow/results')
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data['ok'] is True
+    assert data['result']['run_id'] == run_dir.name

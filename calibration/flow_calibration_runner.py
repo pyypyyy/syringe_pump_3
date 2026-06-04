@@ -11,6 +11,19 @@ from analysis.steady_state import filter_stable_rows, summarize_trial
 from analysis.curve_fit import build_piecewise_curve
 
 
+def rejected_trials_from_meta(trials_meta):
+    return [
+        {
+            'trial_id': x['trial_id'],
+            'target_flow_lpm': x['target_flow_lpm'],
+            'status': x.get('status'),
+            'reason': x.get('reason') or f"Trial status was {x.get('status') or 'not accepted'}",
+        }
+        for x in trials_meta
+        if x.get('status') != 'accepted'
+    ]
+
+
 class FlowCalibrationRunner:
     def __init__(self, config, stepper, softpot, flow_sensor, position_model, status_callback, stop_checker, environment_reader=None):
         self.config = config
@@ -90,7 +103,7 @@ class FlowCalibrationRunner:
         with (run_dir / 'accepted_points.csv').open('w', newline='', encoding='utf-8') as f:
             w = csv.DictWriter(f, fieldnames=['target_flow_lpm','mean_actual_flow_lpm','mean_voltage_v','trial_count','std_actual_flow_lpm','std_voltage_v']); w.writeheader(); w.writerows(points)
 
-        rejected = [{'trial_id':x['trial_id'],'target_flow_lpm':x['target_flow_lpm'],'reason':x.get('reason')} for x in trials_meta if x['status'] != 'accepted']
+        rejected = rejected_trials_from_meta(trials_meta)
         curve = build_piecewise_curve(gas, points, zero_flow=zero_capture, rejected_trials=rejected, source_run_dir=str(run_dir))
         curve['environment_correction'] = 'not_applied'
         with (run_dir / 'calibration_curve.json').open('w', encoding='utf-8') as f: json.dump(curve, f, indent=2)

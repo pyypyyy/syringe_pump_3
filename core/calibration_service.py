@@ -165,7 +165,56 @@ class CalibrationService:
             return {'ok': False, 'error': str(exc)}
 
     def stop_flow_calibration(self): self.flow_stop_requested = True; self.stepper.stop(); return {'ok': True}
-    def flow_results(self): return {'ok': True, 'result': self.flow_run_status.get('result')}
+
+    def _load_flow_run_result(self, run_dir):
+        run_path = Path(run_dir)
+        curve_path = run_path / 'calibration_curve.json'
+        if not curve_path.exists():
+            return None
+        curve = json.loads(curve_path.read_text(encoding='utf-8'))
+        accepted_path = run_path / 'accepted_points.csv'
+        if accepted_path.exists() and not curve.get('model', {}).get('points'):
+            with accepted_path.open(newline='', encoding='utf-8') as f:
+                curve.setdefault('model', {})['points'] = list(csv.DictReader(f))
+        summary_path = run_path / 'summary.csv'
+        trial_statuses = []
+        if summary_path.exists():
+            with summary_path.open(newline='', encoding='utf-8') as f:
+                trial_statuses = list(csv.DictReader(f))
+        return {
+            'ok': True,
+            'run_id': run_path.name,
+            'run_dir': str(run_path),
+            'result': curve,
+            'trial_statuses': trial_statuses,
+            'recent_trials': trial_statuses[-5:],
+            'summary_csv_path': str(summary_path) if summary_path.exists() else None,
+            'accepted_points_csv_path': str(accepted_path) if accepted_path.exists() else None,
+            'calibration_curve_json_path': str(curve_path),
+        }
+
+    def latest_flow_result(self):
+        raw_dir = Path('output/raw')
+        if not raw_dir.exists():
+            return {'ok': False, 'error': 'No flow calibration output directory found.'}
+        candidates = [p for p in raw_dir.glob('flow_calibration_*') if p.is_dir() and (p / 'calibration_curve.json').exists()]
+        if not candidates:
+            return {'ok': False, 'error': 'No automatic flow calibration results found.'}
+        latest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
+        result = self._load_flow_run_result(latest)
+        if result is None:
+            return {'ok': False, 'error': 'Latest automatic flow calibration result is missing calibration_curve.json.'}
+        return result
+
+    def flow_results(self):
+        result = self.flow_run_status.get('result')
+        if result:
+            return {'ok': True, 'result': result}
+        latest = self.latest_flow_result()
+        if latest.get('ok'):
+            return {'ok': True, 'result': latest}
+        return {'ok': True, 'result': None}
+
     def add_flow_calibration_point(self, gas, expected_flow_lpm):
         gas_name = str(gas or '').strip().lower()
         if gas_name not in ('air', 'co2'): return {'ok': False, 'error': "gas must be 'air' or 'co2'"}
