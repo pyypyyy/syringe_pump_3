@@ -53,6 +53,14 @@ flow_calibration:
   stroke_end_ml: 0.0
   analysis_min_ml: 10.0
   analysis_max_ml: 90.0
+  default_measurement:
+    volume_start_ml: 100.0
+    volume_end_ml: 0.0
+    analysis_min_ml: 10.0
+    analysis_max_ml: 90.0
+    min_sample_count: 10
+    min_stable_duration_s: 1.0
+  per_target_measurement: {}
   sample_interval_s: 0.05
   settle_before_s: 1.0
   settle_after_s: 0.5

@@ -11,6 +11,48 @@ from analysis.steady_state import filter_stable_rows, summarize_trial
 from analysis.curve_fit import build_piecewise_curve
 
 
+MEASUREMENT_FIELDS = (
+    'volume_start_ml',
+    'volume_end_ml',
+    'analysis_min_ml',
+    'analysis_max_ml',
+    'min_sample_count',
+    'min_stable_duration_s',
+)
+
+
+def _target_key(value):
+    return f"{float(value):.12g}"
+
+
+def _coerce_measurement(raw):
+    return {k: (None if raw.get(k) is None else float(raw[k]) if k != 'min_sample_count' else int(raw[k])) for k in MEASUREMENT_FIELDS if k in raw}
+
+
+def build_measurement_config(fc, target_flow_lpm, stroke_start_ml=None, stroke_end_ml=None, analysis_min_ml=None, analysis_max_ml=None):
+    """Return the measurement/stability settings to use for one target flow."""
+    qc = fc.get('quality_checks', {})
+    default = {
+        'volume_start_ml': float(stroke_start_ml if stroke_start_ml is not None else fc.get('stroke_start_ml', 100.0)),
+        'volume_end_ml': float(stroke_end_ml if stroke_end_ml is not None else fc.get('stroke_end_ml', 0.0)),
+        'analysis_min_ml': float(analysis_min_ml if analysis_min_ml is not None else fc.get('analysis_min_ml', 10.0)),
+        'analysis_max_ml': float(analysis_max_ml if analysis_max_ml is not None else fc.get('analysis_max_ml', 90.0)),
+        'min_sample_count': int(qc.get('min_sample_count', qc.get('min_stable_samples', 10))),
+        'min_stable_duration_s': float(qc.get('min_stable_duration_s', 1.0)),
+    }
+    default.update(_coerce_measurement(fc.get('default_measurement', {})))
+    per_target = fc.get('per_target_measurement', {}) or {}
+    target_key = _target_key(target_flow_lpm)
+    for key, value in per_target.items():
+        try:
+            if _target_key(key) == target_key:
+                default.update(_coerce_measurement(value or {}))
+                break
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
 def rejected_trials_from_meta(trials_meta):
     return [
         {
@@ -72,7 +114,8 @@ def reject_voltage_outliers(accepted_trials, qc):
                 detail = f"deviation={dev:.4f} V"
             if reject:
                 trial['status'] = 'rejected'
-                trial['reason'] = f"Mean flow voltage outlier for target {target_flow} L/min ({detail}; median={med:.4f} V)"
+                trial['reason'] = 'voltage_outlier_for_target'
+                trial['reason_detail'] = f"Mean flow voltage outlier for target {target_flow} L/min ({detail}; median={med:.4f} V)"
                 rejected.append(trial)
     return rejected
 
@@ -103,7 +146,7 @@ class FlowCalibrationRunner:
         std = (sum((x - mean) ** 2 for x in samples) / len(samples)) ** 0.5
         return {'gas': gas, 'timestamp': datetime.utcnow().isoformat(), 'voltage_v': mean, 'std_v': std, 'sample_count': len(samples)}
 
-    def run(self, gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml=None, analysis_max_ml=None, zero_capture=None):
+    def run(self, gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml=None, analysis_max_ml=None, zero_capture=None, measurement_by_target=None):
         ts = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         run_id = f'flow_calibration_{gas}_{ts}'
         run_dir = Path('output/raw') / run_id
@@ -111,26 +154,34 @@ class FlowCalibrationRunner:
         if zero_capture is None:
             zero_capture = self.capture_zero_flow(gas)
         (run_dir / 'zero_flow_capture.json').write_text(json.dumps(zero_capture, indent=2), encoding='utf-8')
-        trials = CalibrationPlan.build(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml)
-        trial_runner = TrialRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self.stop_checker, self.status_callback, self.environment_reader)
         fc = self.config.get('flow_calibration', {}); qc = fc.get('quality_checks', {})
-        min_ml = float(analysis_min_ml if analysis_min_ml is not None else fc.get('analysis_min_ml', 10.0)); max_ml = float(analysis_max_ml if analysis_max_ml is not None else fc.get('analysis_max_ml', 90.0))
-        min_samples = int(qc.get('min_sample_count', qc.get('min_stable_samples', 10))); min_duration = float(qc.get('min_stable_duration_s', 1.0)); min_nonzero = float(qc.get('min_nonzero_flow_lpm', 0.001)); max_cv = float(qc.get('max_flow_cv', 0.15)); max_std_voltage = qc.get('max_std_flow_voltage_v', None)
+        measurement_by_target = measurement_by_target or {
+            _target_key(flow): build_measurement_config(fc, flow, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml)
+            for flow in flows_lpm
+        }
+        trials = []
+        for flow in flows_lpm:
+            m = measurement_by_target[_target_key(flow)]
+            trials.extend(CalibrationPlan.build(gas, [flow], repeats, m['volume_start_ml'], m['volume_end_ml']))
+        trial_runner = TrialRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self.stop_checker, self.status_callback, self.environment_reader)
+        min_nonzero = float(qc.get('min_nonzero_flow_lpm', 0.001)); max_cv = float(qc.get('max_flow_cv', 0.15)); max_std_voltage = qc.get('max_std_flow_voltage_v', None)
         max_std_voltage = None if max_std_voltage is None else float(max_std_voltage)
         trials_meta = []; accepted = []
         for idx, trial in enumerate(trials, start=1):
-            self.status_callback(current_trial={'trial_id': trial.trial_id, 'gas': trial.gas, 'target_flow_lpm': trial.target_flow_lpm, 'repeat_index': trial.repeat_index}, completed_trials=idx - 1, total_trials=len(trials), current_target_flow_lpm=trial.target_flow_lpm, run_dir=str(run_dir), phase='moving_to_start')
+            measurement = measurement_by_target[_target_key(trial.target_flow_lpm)]
+            self.status_callback(current_trial={'trial_id': trial.trial_id, 'gas': trial.gas, 'target_flow_lpm': trial.target_flow_lpm, 'repeat_index': trial.repeat_index, 'measurement': measurement}, completed_trials=idx - 1, total_trials=len(trials), current_target_flow_lpm=trial.target_flow_lpm, run_dir=str(run_dir), phase='moving_to_start')
             res = trial_runner.run_trial(trial, run_dir / f'{trial.trial_id}.csv')
             tstatus = res['status']; reason = res.get('reason'); stats = None
             if tstatus == 'completed':
-                stable = filter_stable_rows(res['rows'], min_ml, max_ml)
+                stable = filter_stable_rows(res['rows'], measurement['analysis_min_ml'], measurement['analysis_max_ml'])
                 stats = summarize_trial(stable)
-                if stats['sample_count'] < min_samples: tstatus, reason = 'rejected', f"Stable region had only {stats['sample_count']} samples; minimum is {min_samples}"
-                elif stats['stable_duration_s'] < min_duration: tstatus, reason = 'rejected', f"Stable duration {stats['stable_duration_s']:.3f} s is below minimum {min_duration:.3f} s"
-                elif max_std_voltage is not None and stats['std_flow_voltage_v'] > max_std_voltage: tstatus, reason = 'rejected', f"Flow voltage std {stats['std_flow_voltage_v']:.4f} V exceeds maximum {max_std_voltage:.4f} V"
+                if stats['sample_count'] < measurement['min_sample_count']: tstatus, reason = 'rejected', 'sample_count_below_min'
+                elif stats['stable_duration_s'] < measurement['min_stable_duration_s']: tstatus, reason = 'rejected', 'stable_duration_below_min'
+                elif max_std_voltage is not None and stats['std_flow_voltage_v'] > max_std_voltage: tstatus, reason = 'rejected', 'voltage_std_above_max'
                 elif trial.target_flow_lpm > 0 and stats['actual_flow_lpm'] <= min_nonzero: tstatus, reason = 'rejected', 'Actual flow not positive'
-                elif stats['flow_cv'] > max_cv: tstatus, reason = 'rejected', f"Actual flow CV {stats['flow_cv']:.4f} exceeds maximum {max_cv:.4f}"
+                elif stats['flow_cv'] > max_cv: tstatus, reason = 'rejected', 'flow_cv_above_max'
             row = {'gas': gas, 'trial_id': trial.trial_id, 'target_flow_lpm': trial.target_flow_lpm, 'repeat_index': trial.repeat_index, 'status': 'accepted' if tstatus=='completed' else tstatus, 'reason': reason, 'raw_csv_path': str(run_dir / f'{trial.trial_id}.csv')}
+            row.update(measurement)
             if stats:
                 row.update(stats)
             trials_meta.append(row)
@@ -154,7 +205,7 @@ class FlowCalibrationRunner:
             mean_voltage = sum(x['mean_flow_voltage_v'] for x in group) / n
             std_actual = _stddev([x['actual_flow_lpm'] for x in group])
             std_voltage = _stddev([x['mean_flow_voltage_v'] for x in group])
-            point = {'target_flow_lpm': target_flow,'mean_actual_flow_lpm': mean_actual,'mean_voltage_v': mean_voltage,'trial_count': n,'std_actual_flow_lpm': std_actual,'std_voltage_v': std_voltage}
+            point = {'target_flow_lpm': target_flow,'mean_actual_flow_lpm': mean_actual,'mean_voltage_v': mean_voltage,'trial_count': n,'std_actual_flow_lpm': std_actual,'std_voltage_v': std_voltage,'measurement': measurement_by_target.get(_target_key(target_flow), {})}
             if n < 2:
                 point['reason'] = 'Only one accepted trial; excluded from default calibration curve'
                 weak_points.append(point)
