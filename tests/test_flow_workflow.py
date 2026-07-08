@@ -198,3 +198,44 @@ def test_rejected_trials_have_reason_and_exclude_accepted():
     rejected = rejected_trials_from_meta(trials_meta)
     assert [x['trial_id'] for x in rejected] == ['failed']
     assert rejected[0]['reason'] == 'Trial status was failed'
+
+
+def test_voltage_outlier_repeat_is_rejected_and_removed_from_point():
+    from calibration.flow_calibration_runner import reject_voltage_outliers, rejected_trials_from_meta
+
+    trials = [
+        {'gas': 'air', 'trial_id': 'rep1', 'target_flow_lpm': 0.5, 'repeat_index': 1, 'status': 'accepted', 'reason': None, 'mean_flow_voltage_v': 1.9949},
+        {'gas': 'air', 'trial_id': 'rep2', 'target_flow_lpm': 0.5, 'repeat_index': 2, 'status': 'accepted', 'reason': None, 'mean_flow_voltage_v': 1.9018},
+        {'gas': 'air', 'trial_id': 'rep3', 'target_flow_lpm': 0.5, 'repeat_index': 3, 'status': 'accepted', 'reason': None, 'mean_flow_voltage_v': 1.9878},
+    ]
+
+    rejected = reject_voltage_outliers(trials, {'max_voltage_deviation_from_median_v': 0.03, 'max_voltage_mad_z': 6.0})
+
+    assert [x['trial_id'] for x in rejected] == ['rep2']
+    assert trials[1]['status'] == 'rejected'
+    assert 'outlier' in trials[1]['reason']
+    truthful_rejected = rejected_trials_from_meta(trials)
+    assert [x['trial_id'] for x in truthful_rejected] == ['rep2']
+    accepted_voltages = [x['mean_flow_voltage_v'] for x in trials if x['status'] == 'accepted']
+    assert abs((sum(accepted_voltages) / len(accepted_voltages)) - 1.99135) < 0.00001
+
+
+def test_curve_reports_weak_points_warnings_and_truthful_counts():
+    from analysis.curve_fit import build_piecewise_curve
+
+    curve = build_piecewise_curve(
+        'air',
+        [{'target_flow_lpm': 0.5, 'mean_actual_flow_lpm': 0.5, 'mean_voltage_v': 1.99135, 'trial_count': 2, 'std_actual_flow_lpm': 0.0, 'std_voltage_v': 0.00355}],
+        rejected_trials=[{'trial_id': 'rep2', 'target_flow_lpm': 0.5, 'status': 'rejected', 'reason': 'Mean flow voltage outlier'}],
+        weak_points=[{'target_flow_lpm': 0.05, 'mean_actual_flow_lpm': 0.05, 'mean_voltage_v': 0.2, 'trial_count': 1, 'reason': 'Only one accepted trial; excluded from default calibration curve'}],
+        excluded_targets=[{'target_flow_lpm': 0.05, 'reason': 'Only one accepted trial; excluded from default calibration curve', 'accepted_trial_count': 1}],
+        warnings=[{'type': 'weak_target_point', 'target_flow_lpm': 0.05}],
+        accepted_trial_count=3,
+    )
+
+    assert curve['fit_quality']['accepted_trial_count'] == 3
+    assert curve['fit_quality']['rejected_trial_count'] == 1
+    assert curve['weak_points'][0]['target_flow_lpm'] == 0.05
+    assert curve['excluded_targets'][0]['target_flow_lpm'] == 0.05
+    assert curve['warnings'][0]['type'] == 'weak_target_point'
+    assert curve['valid_calibrated_flow_range'] == {'min_lpm': 0.5, 'max_lpm': 0.5}

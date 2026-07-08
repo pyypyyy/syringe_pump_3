@@ -8,7 +8,7 @@ def _stddev(values):
     return (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
 
 
-def build_piecewise_curve(gas, accepted_points, zero_flow=None, rejected_trials=None, source_run_dir=None):
+def build_piecewise_curve(gas, accepted_points, zero_flow=None, rejected_trials=None, source_run_dir=None, weak_points=None, excluded_targets=None, warnings=None, accepted_trial_count=None):
     points = sorted(accepted_points, key=lambda s: float(s['mean_voltage_v']))
     fit_rows = []
     for p in points:
@@ -37,6 +37,15 @@ def build_piecewise_curve(gas, accepted_points, zero_flow=None, rejected_trials=
             point_repeatability.append({'target_flow_lpm': target, 'cv_actual_flow': cv, 'trial_count': trial_count})
 
     rejected = rejected_trials or []
+    weak_points = weak_points or []
+    excluded_targets = excluded_targets or []
+    warnings = warnings or []
+    if accepted_trial_count is None:
+        accepted_trial_count = accepted_trials
+    valid_range = {
+        'min_lpm': min((p.get('mean_actual_flow_lpm', p.get('actual_flow_lpm')) for p in points), default=None),
+        'max_lpm': max((p.get('mean_actual_flow_lpm', p.get('actual_flow_lpm')) for p in points), default=None),
+    }
     return {
         'gas': gas,
         'generated_at': datetime.now(timezone.utc).isoformat(),
@@ -50,7 +59,7 @@ def build_piecewise_curve(gas, accepted_points, zero_flow=None, rejected_trials=
         'fit_quality': {
             'note': 'Interpolation-anchor residual metrics (RMSE/MAE/max_abs_error) intentionally omitted.',
             'accepted_point_count': len(points),
-            'accepted_trial_count': accepted_trials,
+            'accepted_trial_count': accepted_trial_count,
             'rejected_trial_count': len(rejected),
             'target_vs_actual': {
                 'mean_delta_lpm': (sum(target_deltas) / len(target_deltas)) if target_deltas else None,
@@ -64,6 +73,10 @@ def build_piecewise_curve(gas, accepted_points, zero_flow=None, rejected_trials=
             },
         },
         'rejected_trials': rejected,
+        'weak_points': weak_points,
+        'excluded_targets': excluded_targets,
+        'warnings': warnings,
+        'valid_calibrated_flow_range': valid_range,
         'source_run_dir': source_run_dir,
         'usable': len(points) >= 2,
     }

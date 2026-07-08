@@ -79,6 +79,11 @@ flow_calibration:
     sample_interval_s: 0.05
   quality_checks:
     min_stable_samples: 10
+    min_sample_count: 10
     min_stable_duration_s: 1.0
     min_nonzero_flow_lpm: 0.001
     max_flow_cv: 0.15
+    max_std_flow_voltage_v: 0.05
+    outlier_min_repeats: 3
+    max_voltage_deviation_from_median_v: 0.03
+    max_voltage_mad_z: 6.0
