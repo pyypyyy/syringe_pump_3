@@ -5,7 +5,7 @@ from hardware.stepper_driver import StepperDriver
 from motion.jog_controller import JogController
 from motion.softpot_calibrator import SoftpotCalibrator
 from core.calibration_store import FlowCalibrationStore
-from calibration.flow_calibration_runner import FlowCalibrationRunner
+from calibration.flow_calibration_runner import FlowCalibrationRunner, build_measurement_config, _target_key
 from calibration.trial_runner import TrialRunner
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,13 +119,16 @@ class CalibrationService:
             return {'ok': False, 'error': 'flows_lpm must be a non-empty list of positive numbers'}
         if repeats < 1:
             return {'ok': False, 'error': 'repeats must be >= 1'}
-        if not (min_safe <= stroke_start_ml <= max_safe) or not (min_safe <= stroke_end_ml <= max_safe):
-            return {'ok': False, 'error': 'stroke_start_ml and stroke_end_ml must be inside configured safety limits'}
-        if analysis_min_ml >= analysis_max_ml:
-            return {'ok': False, 'error': 'analysis_min_ml must be less than analysis_max_ml'}
-        stroke_low, stroke_high = sorted([stroke_start_ml, stroke_end_ml])
-        if not (stroke_low <= analysis_min_ml <= stroke_high and stroke_low <= analysis_max_ml <= stroke_high):
-            return {'ok': False, 'error': 'analysis range must lie between stroke_start_ml and stroke_end_ml'}
+        measurement_by_target = {}
+        calibrated_values = [p.volume_ml for p in getattr(self.softpot_calibrator, 'points', [])]
+        cal_min = max(min_safe, min(calibrated_values, default=min_safe))
+        cal_max = min(max_safe, max(calibrated_values, default=max_safe))
+        for flow in flows_lpm:
+            measurement = build_measurement_config(fc, flow, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml)
+            err = self._validate_measurement(flow, measurement, cal_min, cal_max)
+            if err:
+                return {'ok': False, 'error': err}
+            measurement_by_target[_target_key(flow)] = measurement
         self.flow_stop_requested = False
         self.stepper.clear_stop()
         runner = FlowCalibrationRunner(self.config, self.stepper, self.softpot, self.flow_sensor, self.position_model, self._set_flow_status, self._is_stop_requested, self._read_environment)
@@ -133,7 +136,7 @@ class CalibrationService:
         def _run():
             self.mode = 'flow_calibration'; self._set_flow_status(running=True, error=None, phase='moving_to_start', last_failure_reason=None)
             try:
-                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml, self.zero_flow_capture_by_gas.get(gas))
+                result = runner.run(gas, flows_lpm, repeats, stroke_start_ml, stroke_end_ml, analysis_min_ml, analysis_max_ml, self.zero_flow_capture_by_gas.get(gas), measurement_by_target=measurement_by_target)
                 self._set_flow_status(
                     running=False,
                     result=result,
@@ -152,6 +155,26 @@ class CalibrationService:
         self._set_flow_status(running=True, gas=gas, current_trial=None, completed_trials=0, total_trials=len(flows_lpm) * repeats, current_target_flow_lpm=None, latest_softpot_volume_ml=None, latest_flow_voltage_v=None, run_dir=None, result=None, error=None, phase='starting', last_failure_reason=None)
         self._flow_thread = threading.Thread(target=_run, daemon=True); self._flow_thread.start()
         return {'ok': True, 'run_id': 'starting', 'trial_count': len(flows_lpm) * repeats}
+
+    def _validate_measurement(self, flow, measurement, min_ml, max_ml):
+        start = measurement['volume_start_ml']
+        end = measurement['volume_end_ml']
+        amin = measurement['analysis_min_ml']
+        amax = measurement['analysis_max_ml']
+        if not (min_ml <= start <= max_ml) or not (min_ml <= end <= max_ml):
+            return f'measurement range for target {flow} L/min must be within calibrated softpot range {min_ml:.3f}-{max_ml:.3f} ml'
+        if start <= end:
+            return f'volume_start_ml must be greater than volume_end_ml for emptying stroke at target {flow} L/min'
+        if amin >= amax:
+            return f'analysis_min_ml must be less than analysis_max_ml for target {flow} L/min'
+        stroke_low, stroke_high = sorted([start, end])
+        if not (stroke_low <= amin <= stroke_high and stroke_low <= amax <= stroke_high):
+            return f'analysis range must lie within measurement stroke range for target {flow} L/min'
+        if int(measurement['min_sample_count']) < 1:
+            return f'min_sample_count must be >= 1 for target {flow} L/min'
+        if float(measurement['min_stable_duration_s']) < 0:
+            return f'min_stable_duration_s must be >= 0 for target {flow} L/min'
+        return None
 
 
     def auto_direction_diagnostic(self, step_ml=0.5):

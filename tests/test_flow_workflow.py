@@ -120,6 +120,9 @@ def test_runner_outputs_summary_and_curve(tmp_path):
     assert 'zero_flow' in curve
     assert 'rmse_lpm' not in curve['fit_quality']
     assert curve['fit_quality']['accepted_point_count'] >= 0
+    import csv
+    summary = list(csv.DictReader((rd / 'summary.csv').open()))
+    assert {'volume_start_ml', 'volume_end_ml', 'analysis_min_ml', 'analysis_max_ml', 'min_sample_count', 'min_stable_duration_s'} <= set(summary[0])
 
 
 def test_move_steps_uses_pigpio_backend(monkeypatch):
@@ -213,7 +216,8 @@ def test_voltage_outlier_repeat_is_rejected_and_removed_from_point():
 
     assert [x['trial_id'] for x in rejected] == ['rep2']
     assert trials[1]['status'] == 'rejected'
-    assert 'outlier' in trials[1]['reason']
+    assert trials[1]['reason'] == 'voltage_outlier_for_target'
+    assert 'outlier' in trials[1]['reason_detail']
     truthful_rejected = rejected_trials_from_meta(trials)
     assert [x['trial_id'] for x in truthful_rejected] == ['rep2']
     accepted_voltages = [x['mean_flow_voltage_v'] for x in trials if x['status'] == 'accepted']
@@ -239,3 +243,41 @@ def test_curve_reports_weak_points_warnings_and_truthful_counts():
     assert curve['excluded_targets'][0]['target_flow_lpm'] == 0.05
     assert curve['warnings'][0]['type'] == 'weak_target_point'
     assert curve['valid_calibrated_flow_range'] == {'min_lpm': 0.5, 'max_lpm': 0.5}
+
+
+def test_build_measurement_config_uses_string_per_target_overrides():
+    from calibration.flow_calibration_runner import build_measurement_config
+
+    fc = {
+        'stroke_start_ml': 100,
+        'stroke_end_ml': 0,
+        'analysis_min_ml': 10,
+        'analysis_max_ml': 90,
+        'quality_checks': {'min_sample_count': 10, 'min_stable_duration_s': 1.0},
+        'default_measurement': {
+            'volume_start_ml': 65,
+            'volume_end_ml': 35,
+            'analysis_min_ml': 35,
+            'analysis_max_ml': 65,
+            'min_sample_count': 20,
+            'min_stable_duration_s': 1.0,
+        },
+        'per_target_measurement': {
+            '0.1': {
+                'volume_start_ml': 60,
+                'volume_end_ml': 40,
+                'analysis_min_ml': 40,
+                'analysis_max_ml': 60,
+                'min_sample_count': 100,
+                'min_stable_duration_s': 10.0,
+            }
+        },
+    }
+
+    overridden = build_measurement_config(fc, 0.10)
+    fallback = build_measurement_config(fc, 0.25)
+
+    assert overridden['volume_start_ml'] == 60
+    assert overridden['min_sample_count'] == 100
+    assert fallback['volume_start_ml'] == 65
+    assert fallback['min_sample_count'] == 20

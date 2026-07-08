@@ -181,7 +181,9 @@ function renderAcceptedPoints(points) {
   }
   for (const p of points) {
     const li = document.createElement("li");
-    li.textContent = `target ${fmt(p.target_flow_lpm, 4, " L/min")} | actual ${fmt(p.mean_actual_flow_lpm, 4, " L/min")} | voltage ${fmt(p.mean_voltage_v, 4, " V")} | trials ${p.trial_count ?? "--"} | actual std ${fmt(p.std_actual_flow_lpm, 4, " L/min")} | voltage std ${fmt(p.std_voltage_v, 4, " V")}`;
+    const m = p.measurement || {};
+    const measurement = m.volume_start_ml !== undefined ? ` | range ${fmt(m.volume_start_ml, 1, " ml")}→${fmt(m.volume_end_ml, 1, " ml")} | analysis ${fmt(m.analysis_min_ml, 1, " ml")}–${fmt(m.analysis_max_ml, 1, " ml")} | min samples ${m.min_sample_count ?? "--"} | min stable ${fmt(m.min_stable_duration_s, 1, " s")}` : "";
+    li.textContent = `target ${fmt(p.target_flow_lpm, 4, " L/min")} | actual ${fmt(p.mean_actual_flow_lpm, 4, " L/min")} | voltage ${fmt(p.mean_voltage_v, 4, " V")} | trials ${p.trial_count ?? "--"} | actual std ${fmt(p.std_actual_flow_lpm, 4, " L/min")} | voltage std ${fmt(p.std_voltage_v, 4, " V")}${measurement}`;
     el.appendChild(li);
   }
 }
@@ -217,7 +219,8 @@ function renderRecentTrials(fc, outer) {
   }
   for (const trial of trials.slice(-10).reverse()) {
     const li = document.createElement("li");
-    li.textContent = `${trial.trial_id || "trial"} | target ${fmt(trial.target_flow_lpm, 4, " L/min")} | repeat ${trial.repeat_index ?? "--"} | status ${trial.status || "--"} | actual ${fmt(trial.actual_flow_lpm, 4, " L/min")} | voltage ${fmt(trial.mean_flow_voltage_v, 4, " V")} | ${trial.reason || "No reason recorded"}`;
+    const measurement = trial.volume_start_ml !== undefined ? ` | range ${fmt(trial.volume_start_ml, 1, " ml")}→${fmt(trial.volume_end_ml, 1, " ml")} | analysis ${fmt(trial.analysis_min_ml, 1, " ml")}–${fmt(trial.analysis_max_ml, 1, " ml")}` : "";
+    li.textContent = `${trial.trial_id || "trial"} | target ${fmt(trial.target_flow_lpm, 4, " L/min")} | repeat ${trial.repeat_index ?? "--"} | status ${trial.status || "--"} | actual ${fmt(trial.actual_flow_lpm, 4, " L/min")} | voltage ${fmt(trial.mean_flow_voltage_v, 4, " V")}${measurement} | ${trial.reason || "No reason recorded"}`;
     el.appendChild(li);
   }
 }
